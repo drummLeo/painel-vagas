@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#6D28D9">
+<meta name="description" content="Retornos de candidaturas, vagas novas e treino de entrevista.">
+<title>Painel</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icons/icon-192.png">
+<link rel="apple-touch-icon" href="icons/icon-192.png">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="top">
+  <div class="brand"><img src="icons/icon-192.png" alt="" width="28" height="28"><span>Painel</span></div>
+  <div class="sync" id="sync" aria-live="polite"></div>
+</header>
+<main id="view" class="wrap" tabindex="-1"></main>
+<nav class="tabs" aria-label="Seções">
+  <a href="#inicio" data-tab="inicio"><span class="ico" aria-hidden="true">⌂</span>Início</a>
+  <a href="#retornos" data-tab="retornos"><span class="ico" aria-hidden="true">✉</span>Retornos<b class="count" id="n-retornos" hidden></b></a>
+  <a href="#vagas" data-tab="vagas"><span class="ico" aria-hidden="true">▤</span>Vagas<b class="count" id="n-vagas" hidden></b></a>
+  <a href="#treino" data-tab="treino"><span class="ico" aria-hidden="true">✎</span>Treino<b class="count" id="n-treino" hidden></b></a>
+  <a href="#ajustes" data-tab="ajustes"><span class="ico" aria-hidden="true">⚙</span>Ajustes</a>
+</nav>
+<div class="toast" id="toast" role="status" hidden></div>
+<script src="app.js"></script>
+</body>
+</html>
