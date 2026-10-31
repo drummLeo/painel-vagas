@@ -296,6 +296,7 @@ function retornoCard(r) {
     <h2>${esc(r.assunto || '(sem assunto)')}</h2>
     <div class="meta">${esc(quem)}</div>
     ${r.trecho ? `<p class="quote ${ok ? '' : 'neutral'}">“${esc(r.trecho)}”</p>` : ''}
+    ${mailDetails(r)}
     <div class="btns">
       ${r.link ? `<a class="btn primary" href="${esc(r.link)}" target="_blank" rel="noopener" data-act="read" data-id="${esc(r.id)}">Abrir no Gmail</a>` : ''}
       ${unread ? `<button class="btn" data-act="read" data-id="${esc(r.id)}">Marcar como lido</button>` : ''}
@@ -347,6 +348,12 @@ function viewInicio() {
   return `<h1>Início</h1>${S.error ? `<div class="panel alert"><p class="lede">${esc(S.error)}</p></div>` : ''}${parts.join('')}`;
 }
 
+// Texto do e-mail guardado pelo bot: abre aqui mesmo, sem depender do Gmail achar a mensagem.
+function mailDetails(r) {
+  if (!r.texto) return '';
+  return `<details class="mail"><summary>Ver e-mail</summary><div class="mailtext">${esc(r.texto)}</div></details>`;
+}
+
 function inscricaoRow(r) {
   return `<article class="panel">
     <div class="row"><span class="pill ${tipoDe(r).cls}">${tipoDe(r).label}</span>
@@ -354,6 +361,7 @@ function inscricaoRow(r) {
     <h2>${esc(r.assunto || '(sem assunto)')}</h2>
     <div class="row"><span class="meta">${esc(r.nome || r.email)}</span>
       ${r.link ? `<a href="${esc(r.link)}" target="_blank" rel="noopener">Abrir no Gmail</a>` : ''}</div>
+    ${mailDetails(r)}
   </article>`;
 }
 
