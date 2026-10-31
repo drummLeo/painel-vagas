@@ -26,6 +26,7 @@ const S = {
   vagasVisto: store.get('vagasVisto', ''),        // encontrada_em mais recente já vista
   vagasVistoAntes: store.get('vagasVisto', ''),   // o de antes desta visita: marca as novas
   pushState: 'checking',
+  pushId: '',                              // hash da inscrição de push deste aparelho
   route: '',
 };
 
@@ -311,7 +312,7 @@ function viewWelcome() {
 function viewInicio() {
   const parts = [];
   const unread = unreadRetornos();
-  if (S.data.push && S.data.push.expirado) {
+  if (myPush() && myPush().expirado) {
     parts.push(`<div class="panel alert"><h2>As notificações pararam</h2><p class="lede">O Android cancelou a inscrição. Reative em Ajustes.</p><a class="btn" href="#ajustes">Reativar</a></div>`);
   } else if (S.pushState === 'off' || S.pushState === 'denied') {
     parts.push(`<div class="panel alert"><h2>Notificações desligadas</h2><p class="lede">Ative para o celular avisar retornos, vagas e o treino.</p><a class="btn" href="#ajustes">Ativar</a></div>`);
@@ -464,6 +465,18 @@ function viewTreino() {
   return parts.join('');
 }
 
+function devicesList() {
+  const subs = Object.entries((S.data.push && S.data.push.inscricoes) || {});
+  if (!subs.length) return '';
+  const rows = subs.map(([id, st]) => {
+    const name = st.dispositivo || 'Aparelho ativado na versão anterior';
+    const state = st.expirado ? '<span class="pill bad">expirada</span>'
+      : st.ultimo_envio ? `<span class="meta">último aviso ${esc(rel(st.ultimo_envio))}</span>` : '<span class="meta">aguardando o bot</span>';
+    return `<li class="row"><span>${esc(name)}${id === S.pushId ? ' <b>(este)</b>' : ''}</span>${state}</li>`;
+  }).join('');
+  return `<p class="eyebrow" style="margin-top:6px">Aparelhos que recebem</p><ul class="list" style="margin:0;padding:0;list-style:none;gap:6px">${rows}</ul>`;
+}
+
 function viewAjustes() {
   const c = S.cfg || {};
   const pushText = {
@@ -485,11 +498,13 @@ function viewAjustes() {
   </form>
   <section class="panel">
     <h2>Notificações</h2>
-    <p class="lede">${esc(pushText)}${S.data.push && S.data.push.expirado ? ' O bot avisou que a inscrição expirou: reative.' : ''}</p>
+    <p class="lede">${esc(pushText)}${myPush() && myPush().expirado ? ' O bot avisou que a inscrição deste aparelho expirou: reative.' : ''}</p>
     <div class="btns">
       <button class="btn primary" data-act="push-on" ${S.cfg ? '' : 'disabled'}>${S.pushState === 'on' ? 'Reativar' : 'Ativar notificações'}</button>
       <button class="btn" data-act="push-test" ${S.pushState === 'on' ? '' : 'disabled'}>Testar</button>
+      ${S.pushState === 'on' ? '<button class="btn" data-act="push-off">Desligar neste aparelho</button>' : ''}
     </div>
+    ${devicesList()}
     <p class="help">Para destacar ainda mais no Android: segure o ícone do Painel → Informações do app → Notificações,
       e ligue "Mostrar como pop-up" e "Ignorar Não perturbe" (os nomes mudam um pouco entre marcas).</p>
   </section>
@@ -566,13 +581,75 @@ async function saveSettings(form) {
   }
 }
 
+// ---------- notificações: uma inscrição por aparelho, em app/inscricoes.json ----------
+const SUBS_PATH = 'app/inscricoes.json';
+const LEGACY_SUB_PATH = 'app/inscricao.json';  // versão antiga: um aparelho só
+
+async function endpointId(endpoint) {
+  // o mesmo hash que o bot usa (SHA-256, 16 primeiros dígitos) para casar o aparelho com data/push.json
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(endpoint));
+  return [...new Uint8Array(digest)].map(b => b.toString(16).padStart(2, '0')).join('').slice(0, 16);
+}
+function deviceName() {
+  const ua = navigator.userAgent;
+  const os = /Android/.test(ua) ? 'Android' : /iPhone|iPad/.test(ua) ? 'iPhone' : /Windows/.test(ua) ? 'Windows'
+    : /Mac OS/.test(ua) ? 'Mac' : /Linux/.test(ua) ? 'Linux' : 'aparelho';
+  const browser = /Edg\//.test(ua) ? 'Edge' : /Firefox\//.test(ua) ? 'Firefox' : /Chrome\//.test(ua) ? 'Chrome' : /Safari\//.test(ua) ? 'Safari' : '';
+  return browser ? `${browser} no ${os}` : os;
+}
+const myPush = () => (S.pushId && S.data.push && (S.data.push.inscricoes || {})[S.pushId]) || null;
+
+// Lê, altera e grava app/inscricoes.json; traz junto a inscrição do formato antigo e apaga o arquivo antigo.
+async function updateSubs(change, message) {
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      const [remote, legacy] = await Promise.all([getFile(SUBS_PATH), getFile(LEGACY_SUB_PATH)]);
+      const subs = (remote && remote.data) || {};
+      if (legacy && legacy.data && legacy.data.endpoint) {
+        const id = await endpointId(legacy.data.endpoint);
+        if (!subs[id]) subs[id] = legacy.data;
+      }
+      change(subs);
+      await putFile(SUBS_PATH, subs, remote && remote.sha, message);
+      if (legacy) {
+        const body = { message: 'painel: migra inscrição antiga', sha: legacy.sha };
+        if (S.cfg.branch) body.branch = S.cfg.branch;
+        await gh(`contents/${LEGACY_SUB_PATH}`, { method: 'DELETE', body }).catch(() => {});
+      }
+      return;
+    } catch (e) {
+      if (e.status === 409 || e.status === 422) continue;
+      throw e;
+    }
+  }
+  throw new Error('outro aparelho gravou ao mesmo tempo; tente de novo');
+}
+
 async function checkPush() {
   if (!('serviceWorker' in navigator) || !('PushManager' in window) || !('Notification' in window)) { S.pushState = 'unsupported'; return; }
   if (Notification.permission === 'denied') { S.pushState = 'denied'; return; }
   try {
     const reg = await navigator.serviceWorker.getRegistration();
-    S.pushState = reg && (await reg.pushManager.getSubscription()) && Notification.permission === 'granted' ? 'on' : 'off';
+    const sub = reg && (await reg.pushManager.getSubscription());
+    S.pushId = sub ? await endpointId(sub.endpoint) : '';
+    S.pushState = sub && Notification.permission === 'granted' ? 'on' : 'off';
   } catch { S.pushState = 'off'; }
+}
+
+async function disablePush() {
+  try {
+    const reg = await navigator.serviceWorker.ready;
+    const sub = await reg.pushManager.getSubscription();
+    const id = sub ? await endpointId(sub.endpoint) : S.pushId;
+    if (sub) await sub.unsubscribe();
+    if (id) await updateSubs(subs => { delete subs[id]; }, 'painel: desativa notificações');
+    S.pushState = 'off';
+    S.pushId = '';
+    toast('Notificações desligadas neste aparelho. Os outros continuam recebendo.');
+  } catch (e) {
+    toast(e.status ? errText(e) : `Não deu para desligar: ${e.message}`, 6000);
+  }
+  render();
 }
 
 async function enablePush() {
@@ -588,14 +665,18 @@ async function enablePush() {
   try {
     const reg = await navigator.serviceWorker.ready;
     const old = await reg.pushManager.getSubscription();
+    const oldId = old ? await endpointId(old.endpoint) : '';
     if (old) await old.unsubscribe();  // sempre uma inscrição nova: resolve as expiradas
     const sub = (await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: urlB64ToUint8Array(key) })).toJSON();
-    const remote = await getFile('app/inscricao.json');
-    await putFile('app/inscricao.json', { endpoint: sub.endpoint, keys: sub.keys, criado_em: new Date().toISOString() },
-      remote && remote.sha, 'painel: ativa notificações');
+    const id = await endpointId(sub.endpoint);
+    // só troca a inscrição deste aparelho; as dos outros aparelhos ficam
+    await updateSubs(subs => {
+      if (oldId) delete subs[oldId];
+      subs[id] = { endpoint: sub.endpoint, keys: sub.keys, criado_em: new Date().toISOString(), dispositivo: deviceName() };
+    }, 'painel: ativa notificações');
     S.pushState = 'on';
-    if (S.data.push) S.data.push.expirado = false;
-    toast('Notificações ativadas. Na próxima execução do bot chega "Painel conectado".', 6000);
+    S.pushId = id;
+    toast('Notificações ativadas neste aparelho. Na próxima execução do bot chega "Painel conectado".', 6000);
   } catch (e) {
     toast(e.status ? errText(e) : `Não deu para ativar: ${e.message}`, 6000);
   }
@@ -662,6 +743,8 @@ document.addEventListener('click', e => {
     refreshNow();
   } else if (act === 'push-on') {
     enablePush();
+  } else if (act === 'push-off') {
+    disablePush();
   } else if (act === 'push-test') {
     testPush();
   } else if (act === 'theme') {
