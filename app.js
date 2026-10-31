@@ -298,7 +298,7 @@ function retornoCard(r) {
     ${r.trecho ? `<p class="quote ${ok ? '' : 'neutral'}">“${esc(r.trecho)}”</p>` : ''}
     ${mailDetails(r)}
     <div class="btns">
-      ${r.link ? `<a class="btn primary" href="${esc(r.link)}" target="_blank" rel="noopener" data-act="read" data-id="${esc(r.id)}">Abrir no Gmail</a>` : ''}
+      ${gmailButton(r, 'btn primary')}
       ${unread ? `<button class="btn" data-act="read" data-id="${esc(r.id)}">Marcar como lido</button>` : ''}
     </div>
   </article>`;
@@ -348,6 +348,16 @@ function viewInicio() {
   return `<h1>Início</h1>${S.error ? `<div class="panel alert"><p class="lede">${esc(S.error)}</p></div>` : ''}${parts.join('')}`;
 }
 
+// No computador, o link abre a conversa no Gmail. No celular o Gmail ignora o link e abre só a
+// caixa de entrada, então o botão copia o assunto para colar na busca do app do Gmail.
+const IS_MOBILE = /Android|iPhone|iPad/.test(navigator.userAgent);
+function gmailButton(r, cls) {
+  if (IS_MOBILE) {
+    return r.assunto ? `<button class="${cls}" data-act="copy" data-text="${esc(r.assunto)}" data-id="${esc(r.id)}">Copiar assunto</button>` : '';
+  }
+  return r.link ? `<a class="${cls}" href="${esc(r.link)}" target="_blank" rel="noopener" data-act="read" data-id="${esc(r.id)}">Abrir no Gmail</a>` : '';
+}
+
 // Texto do e-mail guardado pelo bot: abre aqui mesmo, sem depender do Gmail achar a mensagem.
 function mailDetails(r) {
   if (!r.texto) return '';
@@ -360,7 +370,7 @@ function inscricaoRow(r) {
       <span class="meta">${isUnread(r) ? '<span class="newdot"></span>' : ''}${esc(rel(quando(r)))}</span></div>
     <h2>${esc(r.assunto || '(sem assunto)')}</h2>
     <div class="row"><span class="meta">${esc(r.nome || r.email)}</span>
-      ${r.link ? `<a href="${esc(r.link)}" target="_blank" rel="noopener">Abrir no Gmail</a>` : ''}</div>
+      ${gmailButton(r, 'btn')}</div>
     ${mailDetails(r)}
   </article>`;
 }
@@ -751,6 +761,14 @@ document.addEventListener('click', e => {
     refreshNow();
   } else if (act === 'push-on') {
     enablePush();
+  } else if (act === 'copy') {
+    const text = el.dataset.text;
+    const done = () => toast('Assunto copiado. Cole na busca do app do Gmail.');
+    (navigator.clipboard ? navigator.clipboard.writeText(text) : Promise.reject())
+      .then(done, () => toast(text, 6000));  // sem acesso à área de transferência: mostra para copiar à mão
+    if (isUnread((S.data.retornos || []).find(r => r.id === el.dataset.id) || {})) {
+      setMarks(m => { m.retornos_lidos[el.dataset.id] = todayBRT(); });
+    }
   } else if (act === 'push-off') {
     disablePush();
   } else if (act === 'push-test') {
