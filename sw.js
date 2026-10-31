@@ -1,10 +1,12 @@
 // Service worker do Painel: guarda o app para abrir sem rede e mostra as notificações push.
-const CACHE = 'painel-v2';
+const CACHE = 'painel-v3';
 const ASSETS = ['./', 'index.html', 'style.css', 'app.js', 'manifest.webmanifest',
   'icons/icon-192.png', 'icons/icon-512.png', 'icons/badge-96.png'];
 
 self.addEventListener('install', event => {
-  event.waitUntil(caches.open(CACHE).then(c => c.addAll(ASSETS)).then(() => self.skipWaiting()));
+  event.waitUntil(caches.open(CACHE)
+    .then(c => c.addAll(ASSETS.map(u => new Request(u, { cache: 'reload' }))))
+    .then(() => self.skipWaiting()));
 });
 
 self.addEventListener('activate', event => {
@@ -14,11 +16,12 @@ self.addEventListener('activate', event => {
 });
 
 // Arquivos do próprio app: rede primeiro (para receber atualizações), cache se estiver sem rede.
+// "no-cache" revalida com o servidor: o GitHub Pages manda guardar por 10 min, o que mostrava a versão velha.
 // Os dados vêm da API do GitHub e nunca são guardados aqui.
 self.addEventListener('fetch', event => {
   const url = new URL(event.request.url);
   if (event.request.method !== 'GET' || url.origin !== self.location.origin) return;
-  event.respondWith(fetch(event.request)
+  event.respondWith(fetch(url.href, { cache: 'no-cache', credentials: 'same-origin' })
     .then(res => {
       if (res.ok) { const copy = res.clone(); caches.open(CACHE).then(c => c.put(event.request, copy)); }
       return res;

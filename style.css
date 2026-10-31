@@ -95,6 +95,7 @@ h2 { font: 650 17px/1.25 var(--f-display); margin: 0; }
 /* cartões genéricos */
 .panel { background: var(--card); border-radius: 12px; box-shadow: var(--shadow); padding: 16px; display: grid; gap: 10px; min-width: 0; }
 .panel.hl { box-shadow: 0 0 0 2px var(--ok), var(--shadow); }
+.panel.hl-warn { box-shadow: 0 0 0 2px var(--warn), var(--shadow); }
 .panel.alert { background: var(--warn-soft); box-shadow: none; }
 .panel.alert h2 { color: var(--warn); }
 .row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; justify-content: space-between; }

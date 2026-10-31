@@ -217,15 +217,33 @@ const TIPOS = {
   avancou: { label: '🎉 Avançou', cls: 'ok', avanco: true },  // nome antigo de "aprovado"
   entrevista: { label: '🗓 Entrevista', cls: 'ok', avanco: true },
   teste: { label: '📝 Teste', cls: 'ok', avanco: true },
+  pendente: { label: '⏳ Inscrição incompleta', cls: 'warn', destaque: true },
+  inscricao: { label: '✅ Inscrição confirmada', cls: 'brand' },
   reprovado: { label: 'Não seguiu', cls: 'bad' },
-  inscricao: { label: 'Inscrição confirmada', cls: 'brand' },
 };
-const tipoDe = r => TIPOS[r.tipo] || TIPOS.aprovado;
+const tipoDe = r => TIPOS[r.tipo] || { label: 'Candidatura', cls: 'brand' };
 const quando = r => r.data_email || r.recebido_em;
-function unreadRetornos() {
-  return (S.data.retornos || []).filter(r => tipoDe(r).avanco && !S.marks.retornos_lidos[r.id]);
+const isUnread = r => !r.antigo && !S.marks.retornos_lidos[r.id];  // os do histórico já entram como lidos
+function unreadRetornos() { return (S.data.retornos || []).filter(isUnread); }
+// Último e-mail de candidatura de cada vaga (o bot liga o e-mail à vaga pelo título e pela empresa).
+function retornoPorVaga() {
+  const map = {};
+  for (const r of S.data.retornos || []) {
+    if (r.vaga_id && (!map[r.vaga_id] || quando(r) > quando(map[r.vaga_id]))) map[r.vaga_id] = r;
+  }
+  return map;
 }
-function newVagas() { return (S.data.vagas || []).filter(v => !S.marks.vagas[v.id] && v.encontrada_em > S.vagasVisto); }
+// Status da vaga: o que você marcou; senão "candidatei" se chegou e-mail da candidatura.
+// "nenhuma" é você desmarcando uma vaga que o bot tinha marcado sozinho.
+function vagaStatus(id, links = retornoPorVaga()) {
+  const m = S.marks.vagas[id];
+  if (m === 'nenhuma') return '';
+  return m || (links[id] ? 'candidatei' : '');
+}
+function newVagas() {
+  const links = retornoPorVaga();
+  return (S.data.vagas || []).filter(v => !vagaStatus(v.id, links) && v.encontrada_em > S.vagasVisto);
+}
 function treinoInfo() {
   const t = S.data.treino, deck = S.data.cards;
   if (!t || !deck || !Array.isArray(t.cartoes)) return null;
@@ -269,9 +287,9 @@ function todayPanel(info) {
 function retornoCard(r) {
   const tipo = tipoDe(r);
   const ok = tipo.avanco;
-  const unread = ok && !S.marks.retornos_lidos[r.id];
+  const unread = isUnread(r);
   const quem = r.nome ? `${r.nome}${r.email ? ` (${domain(r.email)})` : ''}` : r.email;
-  return `<article class="panel ${unread ? 'hl' : ''}">
+  return `<article class="panel ${unread && ok ? 'hl' : ''} ${unread && tipo.destaque ? 'hl-warn' : ''}">
     <div class="row"><span class="pill ${tipo.cls}">${tipo.label}</span>
       <span class="meta">${unread ? '<span class="newdot"></span>' : ''}${esc(rel(quando(r)))}</span></div>
     <h2>${esc(r.assunto || '(sem assunto)')}</h2>
@@ -330,33 +348,47 @@ function viewInicio() {
 
 function inscricaoRow(r) {
   return `<article class="panel">
-    <div class="row"><h2>${esc(r.assunto || '(sem assunto)')}</h2><span class="meta">${esc(rel(quando(r)))}</span></div>
+    <div class="row"><span class="pill ${tipoDe(r).cls}">${tipoDe(r).label}</span>
+      <span class="meta">${isUnread(r) ? '<span class="newdot"></span>' : ''}${esc(rel(quando(r)))}</span></div>
+    <h2>${esc(r.assunto || '(sem assunto)')}</h2>
     <div class="row"><span class="meta">${esc(r.nome || r.email)}</span>
       ${r.link ? `<a href="${esc(r.link)}" target="_blank" rel="noopener">Abrir no Gmail</a>` : ''}</div>
   </article>`;
+}
+
+// Confirmações e rejeições contam como lidas depois de aparecerem na tela; avanços e inscrições
+// incompletas só quando você abre ou marca, porque pedem alguma ação.
+let autoReadTimer;
+function autoRead(items) {
+  const ids = items.filter(r => (r.tipo === 'inscricao' || r.tipo === 'reprovado') && isUnread(r)).map(r => r.id);
+  clearTimeout(autoReadTimer);
+  if (ids.length) autoReadTimer = setTimeout(() => setMarks(m => { for (const id of ids) m.retornos_lidos[id] = todayBRT(); }), 2000);
 }
 
 function viewRetornos() {
   const all = (S.data.retornos || []).slice().sort((a, b) => (quando(b) || '').localeCompare(quando(a) || ''));
   const groups = {
     avancos: all.filter(r => tipoDe(r).avanco),
-    inscricoes: all.filter(r => r.tipo === 'inscricao'),
+    inscricoes: all.filter(r => r.tipo === 'inscricao' || r.tipo === 'pendente'),
     rejeicoes: all.filter(r => r.tipo === 'reprovado'),
   };
   const f = groups[S.retornosFiltro] ? S.retornosFiltro : 'avancos';
-  const seg = [['avancos', 'Avanços'], ['inscricoes', 'Inscrições'], ['rejeicoes', 'Rejeições']].map(([k, label]) =>
-    `<button data-act="rfiltro" data-f="${k}" aria-pressed="${f === k}">${label} <span class="n">${groups[k].length}</span></button>`).join('');
+  const seg = [['avancos', 'Avanços'], ['inscricoes', 'Inscrições'], ['rejeicoes', 'Rejeições']].map(([k, label]) => {
+    const novos = groups[k].filter(isUnread).length;
+    return `<button data-act="rfiltro" data-f="${k}" aria-pressed="${f === k}">${novos ? '<span class="newdot"></span>' : ''}${label} <span class="n">${groups[k].length}</span></button>`;
+  }).join('');
   const lede = {
-    avancos: 'Aprovações, convites para entrevista e testes. Estes avisam no celular.',
-    inscricoes: 'Confirmações de que a candidatura foi recebida. Ficam só aqui, sem aviso.',
-    rejeicoes: 'Processos que não seguiram. Ficam só aqui, sem aviso.',
+    avancos: 'Aprovações, convites para entrevista e testes.',
+    inscricoes: 'Inscrições confirmadas e as que ficaram por terminar.',
+    rejeicoes: 'Processos que não seguiram.',
   }[f];
   const empty = {
     avancos: 'Nenhum avanço ainda. Quando um e-mail indicar aprovação, entrevista ou teste, ele aparece aqui e o celular avisa.',
-    inscricoes: 'Nenhuma confirmação de inscrição registrada.',
+    inscricoes: 'Nenhuma inscrição registrada nos últimos 90 dias.',
     rejeicoes: 'Nenhuma rejeição registrada.',
   }[f];
-  const items = groups[f].map(f === 'inscricoes' ? inscricaoRow : retornoCard).join('');
+  const items = groups[f].map(r => (r.tipo === 'inscricao' ? inscricaoRow(r) : retornoCard(r))).join('');
+  autoRead(groups[f]);
   return `<h1>Retornos</h1><div class="seg" role="group" aria-label="Tipo">${seg}</div>
   <p class="lede">${lede}</p>
   ${items ? `<div class="list">${items}</div>` : `<p class="empty">${empty}</p>`}`;
@@ -364,19 +396,22 @@ function viewRetornos() {
 
 function viewVagas() {
   const all = S.data.vagas || [];
+  const links = retornoPorVaga();
   const groups = {
-    novas: all.filter(v => !S.marks.vagas[v.id]),
-    candidatei: all.filter(v => S.marks.vagas[v.id] === 'candidatei'),
-    descartada: all.filter(v => S.marks.vagas[v.id] === 'descartada'),
+    novas: all.filter(v => !vagaStatus(v.id, links)),
+    candidatei: all.filter(v => vagaStatus(v.id, links) === 'candidatei'),
+    descartada: all.filter(v => vagaStatus(v.id, links) === 'descartada'),
   };
   const f = groups[S.vagasFiltro] ? S.vagasFiltro : 'novas';
   const seg = [['novas', 'Novas'], ['candidatei', 'Candidatei'], ['descartada', 'Descartadas']].map(([k, label]) =>
     `<button data-act="filtro" data-f="${k}" aria-pressed="${f === k}">${label} <span class="n">${groups[k].length}</span></button>`).join('');
   const items = groups[f].slice(0, 150).map(v => {
-    const st = S.marks.vagas[v.id] || '';
+    const st = vagaStatus(v.id, links);
     const isNew = v.encontrada_em > S.vagasVistoAntes && !st;
     const where = [v.empresa, v.local, v.modelo_texto].filter(Boolean).join(' · ');
-    return `<article class="panel job ${st ? 'done' : ''}">
+    const r = links[v.id];
+    return `<article class="panel job ${st === 'descartada' ? 'done' : ''}">
+      ${r ? `<div class="row"><a class="pill ${tipoDe(r).cls}" href="#retornos" style="text-decoration:none">${tipoDe(r).label}</a><span class="meta">${esc(rel(quando(r)))}</span></div>` : ''}
       <h2>${isNew ? '<span class="newdot" title="Nova"></span>' : ''}${esc(v.titulo)}</h2>
       ${where ? `<div class="meta">${esc(where)}</div>` : ''}
       <div class="meta">${esc(v.fonte)} · encontrada ${esc(rel(v.encontrada_em))}</div>
@@ -387,7 +422,8 @@ function viewVagas() {
       </div></article>`;
   }).join('');
   const empty = { novas: 'Nenhuma vaga sem marcação. As novas aparecem aqui a cada 2 horas.',
-    candidatei: 'Marque "Candidatei" nas vagas em que você se inscreveu.', descartada: 'Nenhuma vaga descartada.' }[f];
+    candidatei: 'Marque "Candidatei" nas vagas em que você se inscreveu. Quando chega um e-mail da candidatura, o bot marca sozinho.',
+    descartada: 'Nenhuma vaga descartada.' }[f];
   return `<h1>Vagas</h1><div class="seg" role="group" aria-label="Filtro">${seg}</div>
     ${items ? `<div class="list">${items}</div>` : `<p class="empty">${empty}</p>`}
     <p class="meta">As vagas ficam aqui por 30 dias depois de encontradas.</p>`;
@@ -488,6 +524,7 @@ function render() {
   const route = (location.hash.slice(1) || 'inicio').split('?')[0];
   const views = { inicio: viewInicio, retornos: viewRetornos, vagas: viewVagas, treino: viewTreino, ajustes: viewAjustes };
   const name = views[route] ? route : 'inicio';
+  if (name !== 'retornos') clearTimeout(autoReadTimer);
   if (name !== S.route) {
     if (S.route === 'vagas') S.vagasVistoAntes = S.vagasVisto;  // saiu de Vagas: as vistas deixam de ser "novas"
     if (name === 'vagas') {
@@ -594,7 +631,13 @@ document.addEventListener('click', e => {
     if (el.tagName === 'A') setTimeout(mark, 0); else mark();
   } else if (act === 'vaga') {
     const { id, v } = el.dataset;
-    setMarks(m => { if (m.vagas[id] === v) delete m.vagas[id]; else m.vagas[id] = v; });
+    const links = retornoPorVaga();
+    if (vagaStatus(id, links) === v) {
+      // desmarcar: se o bot marcou sozinho (e-mail da candidatura), guarda "nenhuma" para não voltar
+      setMarks(m => { if (links[id]) m.vagas[id] = 'nenhuma'; else delete m.vagas[id]; });
+    } else {
+      setMarks(m => { m.vagas[id] = v; });
+    }
   } else if (act === 'filtro') {
     S.vagasFiltro = el.dataset.f;
     store.set('vagasFiltro', S.vagasFiltro);
@@ -653,6 +696,12 @@ document.addEventListener('visibilitychange', () => {
   if (theme !== 'auto') document.documentElement.dataset.theme = theme;
   if ('serviceWorker' in navigator) {
     navigator.serviceWorker.register('sw.js').catch(() => {});
+    // versão nova do app instalada: recarrega uma vez para usá-la já (sem esperar fechar e abrir)
+    const hadController = Boolean(navigator.serviceWorker.controller);
+    let reloaded = false;
+    navigator.serviceWorker.addEventListener('controllerchange', () => {
+      if (hadController && !reloaded) { reloaded = true; location.reload(); }
+    });
     navigator.serviceWorker.addEventListener('message', ev => {
       if (ev.data && ev.data.type === 'push') loadAll();
       if (ev.data && ev.data.type === 'open') { location.hash = ev.data.hash; loadAll(); }
