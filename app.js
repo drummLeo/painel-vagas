@@ -230,7 +230,9 @@ function unreadRetornos() { return (S.data.retornos || []).filter(isUnread); }
 function retornoPorVaga() {
   const map = {};
   for (const r of S.data.retornos || []) {
-    if (r.vaga_id && (!map[r.vaga_id] || quando(r) > quando(map[r.vaga_id]))) map[r.vaga_id] = r;
+    for (const id of r.vaga_ids || (r.vaga_id ? [r.vaga_id] : [])) {  // a mesma vaga pode ter vindo em vários alertas
+      if (!map[id] || quando(r) > quando(map[id])) map[id] = r;
+    }
   }
   return map;
 }
@@ -420,12 +422,13 @@ function candidaturasPorEmail() {
   for (const r of S.data.retornos || []) (groups[r.candidatura || r.id] ||= []).push(r);
   return Object.values(groups)
     .map(items => items.slice().sort((a, b) => (quando(b) || '').localeCompare(quando(a) || '')))
-    .filter(items => !items.some(r => r.vaga_id))   // ligada a uma vaga do bot: aparece como a vaga
     .sort((a, b) => (quando(b[0]) || '').localeCompare(quando(a[0]) || ''));
 }
 
 function candidaturaCard(items) {
   const last = items[0];
+  const vagaId = items.map(r => r.vaga_id).find(Boolean);
+  const vaga = vagaId && (S.data.vagas || []).find(v => v.id === vagaId);
   const tipo = tipoDe(last);
   const empresa = items.map(r => r.empresa).find(Boolean) || last.nome || '';
   const titulo = items.map(r => r.cargo).find(Boolean) || (empresa ? `Candidatura na ${empresa}` : last.assunto) || '(sem assunto)';
@@ -436,6 +439,7 @@ function candidaturaCard(items) {
     <div class="row"><span class="pill ${tipo.cls}">${tipo.label}</span><span class="meta">${esc(rel(quando(last)))}</span></div>
     <h2>${esc(titulo)}</h2>
     ${empresa ? `<div class="meta">${esc(empresa)}</div>` : ''}
+    ${vaga && vaga.url ? `<div class="btns"><a class="btn" href="${esc(vaga.url)}" target="_blank" rel="noopener">Ver vaga</a></div>` : ''}
     <details class="mail"><summary>${items.length === 1 ? 'Ver e-mail' : `Ver os ${items.length} e-mails`}</summary>
       <ul class="list history">${history}</ul></details>
   </article>`;
@@ -447,7 +451,8 @@ function viewVagas() {
   const porEmail = candidaturasPorEmail();
   const groups = {
     novas: all.filter(v => !vagaStatus(v.id, links)),
-    candidatei: all.filter(v => vagaStatus(v.id, links) === 'candidatei'),
+    // ligadas a um e-mail de candidatura aparecem uma vez só, no cartão da candidatura (com "Ver vaga")
+    candidatei: all.filter(v => vagaStatus(v.id, links) === 'candidatei' && !links[v.id]),
     descartada: all.filter(v => vagaStatus(v.id, links) === 'descartada'),
   };
   const counts = { ...Object.fromEntries(Object.entries(groups).map(([k, v]) => [k, v.length])) };
