@@ -22,6 +22,7 @@ const S = {
   error: '',
   reveal: false,
   vagasFiltro: store.get('vagasFiltro', 'novas'),
+  retornosFiltro: store.get('retornosFiltro', 'avancos'),
   vagasVisto: store.get('vagasVisto', ''),        // encontrada_em mais recente já vista
   vagasVistoAntes: store.get('vagasVisto', ''),   // o de antes desta visita: marca as novas
   pushState: 'checking',
@@ -210,7 +211,20 @@ function setMarks(fn) {
 }
 
 // ---------- derivados ----------
-function unreadRetornos() { return (S.data.retornos || []).filter(r => !S.marks.retornos_lidos[r.id]); }
+// Tipos de e-mail de candidatura. Só os de avanço contam como "novo" e ganham destaque.
+const TIPOS = {
+  aprovado: { label: '🎉 Avançou', cls: 'ok', avanco: true },
+  avancou: { label: '🎉 Avançou', cls: 'ok', avanco: true },  // nome antigo de "aprovado"
+  entrevista: { label: '🗓 Entrevista', cls: 'ok', avanco: true },
+  teste: { label: '📝 Teste', cls: 'ok', avanco: true },
+  reprovado: { label: 'Não seguiu', cls: 'bad' },
+  inscricao: { label: 'Inscrição confirmada', cls: 'brand' },
+};
+const tipoDe = r => TIPOS[r.tipo] || TIPOS.aprovado;
+const quando = r => r.data_email || r.recebido_em;
+function unreadRetornos() {
+  return (S.data.retornos || []).filter(r => tipoDe(r).avanco && !S.marks.retornos_lidos[r.id]);
+}
 function newVagas() { return (S.data.vagas || []).filter(v => !S.marks.vagas[v.id] && v.encontrada_em > S.vagasVisto); }
 function treinoInfo() {
   const t = S.data.treino, deck = S.data.cards;
@@ -253,12 +267,13 @@ function todayPanel(info) {
 }
 
 function retornoCard(r) {
-  const unread = !S.marks.retornos_lidos[r.id];
-  const ok = r.tipo === 'avancou';
+  const tipo = tipoDe(r);
+  const ok = tipo.avanco;
+  const unread = ok && !S.marks.retornos_lidos[r.id];
   const quem = r.nome ? `${r.nome}${r.email ? ` (${domain(r.email)})` : ''}` : r.email;
-  return `<article class="panel ${ok && unread ? 'hl' : ''}">
-    <div class="row"><span class="pill ${ok ? 'ok' : 'bad'}">${ok ? '🎉 Avançou' : 'Retorno negativo'}</span>
-      <span class="meta">${unread ? '<span class="newdot"></span>' : ''}${esc(rel(r.recebido_em))}</span></div>
+  return `<article class="panel ${unread ? 'hl' : ''}">
+    <div class="row"><span class="pill ${tipo.cls}">${tipo.label}</span>
+      <span class="meta">${unread ? '<span class="newdot"></span>' : ''}${esc(rel(quando(r)))}</span></div>
     <h2>${esc(r.assunto || '(sem assunto)')}</h2>
     <div class="meta">${esc(quem)}</div>
     ${r.trecho ? `<p class="quote ${ok ? '' : 'neutral'}">“${esc(r.trecho)}”</p>` : ''}
@@ -303,8 +318,9 @@ function viewInicio() {
   if (quebradas.length) {
     parts.push(`<div class="panel alert"><h2>Fonte com problema</h2>${quebradas.map(f => `<p class="lede">${esc(f.rotulo)} falhou nas últimas ${f.falhas} execuções.</p>`).join('')}</div>`);
   }
+  const inscricoes = (S.data.retornos || []).filter(r => r.tipo === 'inscricao').length;
   if (!unread.length && (S.data.retornos || []).length) {
-    parts.push(`<p class="meta">Retornos anteriores em <a href="#retornos">Retornos</a>.</p>`);
+    parts.push(`<p class="meta">Retornos anteriores${inscricoes ? ` e ${plural(inscricoes, 'inscrição confirmada', 'inscrições confirmadas')}` : ''} em <a href="#retornos">Retornos</a>.</p>`);
   }
   const bot = S.data.status && S.data.status.atualizado_em;
   parts.push(`<div class="row"><span class="meta">${bot ? `Bot rodou ${esc(rel(bot))}` : ''}</span>
@@ -312,12 +328,38 @@ function viewInicio() {
   return `<h1>Início</h1>${S.error ? `<div class="panel alert"><p class="lede">${esc(S.error)}</p></div>` : ''}${parts.join('')}`;
 }
 
+function inscricaoRow(r) {
+  return `<article class="panel">
+    <div class="row"><h2>${esc(r.assunto || '(sem assunto)')}</h2><span class="meta">${esc(rel(quando(r)))}</span></div>
+    <div class="row"><span class="meta">${esc(r.nome || r.email)}</span>
+      ${r.link ? `<a href="${esc(r.link)}" target="_blank" rel="noopener">Abrir no Gmail</a>` : ''}</div>
+  </article>`;
+}
+
 function viewRetornos() {
-  const list = S.data.retornos || [];
-  return `<h1>Retornos</h1>
-  <p class="lede">E-mails que indicam que uma candidatura avançou: aprovação, entrevista, teste ou proposta.</p>
-  ${list.length ? `<div class="list">${list.map(retornoCard).join('')}</div>`
-    : '<p class="empty">Nenhum retorno ainda. Quando um e-mail indicar que você avançou, ele aparece aqui e o celular avisa.</p>'}`;
+  const all = (S.data.retornos || []).slice().sort((a, b) => (quando(b) || '').localeCompare(quando(a) || ''));
+  const groups = {
+    avancos: all.filter(r => tipoDe(r).avanco),
+    inscricoes: all.filter(r => r.tipo === 'inscricao'),
+    rejeicoes: all.filter(r => r.tipo === 'reprovado'),
+  };
+  const f = groups[S.retornosFiltro] ? S.retornosFiltro : 'avancos';
+  const seg = [['avancos', 'Avanços'], ['inscricoes', 'Inscrições'], ['rejeicoes', 'Rejeições']].map(([k, label]) =>
+    `<button data-act="rfiltro" data-f="${k}" aria-pressed="${f === k}">${label} <span class="n">${groups[k].length}</span></button>`).join('');
+  const lede = {
+    avancos: 'Aprovações, convites para entrevista e testes. Estes avisam no celular.',
+    inscricoes: 'Confirmações de que a candidatura foi recebida. Ficam só aqui, sem aviso.',
+    rejeicoes: 'Processos que não seguiram. Ficam só aqui, sem aviso.',
+  }[f];
+  const empty = {
+    avancos: 'Nenhum avanço ainda. Quando um e-mail indicar aprovação, entrevista ou teste, ele aparece aqui e o celular avisa.',
+    inscricoes: 'Nenhuma confirmação de inscrição registrada.',
+    rejeicoes: 'Nenhuma rejeição registrada.',
+  }[f];
+  const items = groups[f].map(f === 'inscricoes' ? inscricaoRow : retornoCard).join('');
+  return `<h1>Retornos</h1><div class="seg" role="group" aria-label="Tipo">${seg}</div>
+  <p class="lede">${lede}</p>
+  ${items ? `<div class="list">${items}</div>` : `<p class="empty">${empty}</p>`}`;
 }
 
 function viewVagas() {
@@ -556,6 +598,10 @@ document.addEventListener('click', e => {
   } else if (act === 'filtro') {
     S.vagasFiltro = el.dataset.f;
     store.set('vagasFiltro', S.vagasFiltro);
+    render();
+  } else if (act === 'rfiltro') {
+    S.retornosFiltro = el.dataset.f;
+    store.set('retornosFiltro', S.retornosFiltro);
     render();
   } else if (act === 'reveal') {
     S.reveal = true;
