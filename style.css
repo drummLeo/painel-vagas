@@ -103,6 +103,8 @@ h2 { font: 650 17px/1.25 var(--f-display); margin: 0; }
 .quote { margin: 0; padding: 8px 12px; border-left: 3px solid var(--ok); background: var(--ok-soft); border-radius: 0 8px 8px 0; font-style: italic; overflow-wrap: anywhere; }
 .quote.neutral { border-left-color: var(--line); background: var(--note); }
 .list { display: grid; gap: 12px; }
+.history { margin: 8px 0 0; padding: 0; list-style: none; gap: 14px; }
+.history li { display: grid; gap: 6px; padding-top: 10px; border-top: 1px solid var(--line); }
 details.mail summary { cursor: pointer; color: var(--accent); font-weight: 600; font-size: 15px; padding: 4px 0; }
 .mailtext {
   margin-top: 8px; padding: 12px; border-radius: 8px; background: var(--note); font-size: 14px; line-height: 1.5;

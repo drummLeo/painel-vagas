@@ -413,18 +413,50 @@ function viewRetornos() {
   ${items ? `<div class="list">${items}</div>` : `<p class="empty">${empty}</p>`}`;
 }
 
+// Candidaturas feitas fora do bot (LinkedIn, Gupy, sites das empresas...), montadas pelos e-mails:
+// o bot põe em cada e-mail a chave "candidatura" (empresa + cargo), que junta os e-mails do mesmo processo.
+function candidaturasPorEmail() {
+  const groups = {};
+  for (const r of S.data.retornos || []) (groups[r.candidatura || r.id] ||= []).push(r);
+  return Object.values(groups)
+    .map(items => items.slice().sort((a, b) => (quando(b) || '').localeCompare(quando(a) || '')))
+    .filter(items => !items.some(r => r.vaga_id))   // ligada a uma vaga do bot: aparece como a vaga
+    .sort((a, b) => (quando(b[0]) || '').localeCompare(quando(a[0]) || ''));
+}
+
+function candidaturaCard(items) {
+  const last = items[0];
+  const tipo = tipoDe(last);
+  const empresa = items.map(r => r.empresa).find(Boolean) || last.nome || '';
+  const titulo = items.map(r => r.cargo).find(Boolean) || (empresa ? `Candidatura na ${empresa}` : last.assunto) || '(sem assunto)';
+  const history = items.map(r => `<li><div class="row"><span class="pill ${tipoDe(r).cls}">${tipoDe(r).label}</span>
+      <span class="meta">${esc(rel(quando(r)))}</span></div>
+      <div class="meta">${esc(r.assunto || '')}</div>${mailDetails(r)}<div class="btns">${gmailButton(r, 'btn')}</div></li>`).join('');
+  return `<article class="panel">
+    <div class="row"><span class="pill ${tipo.cls}">${tipo.label}</span><span class="meta">${esc(rel(quando(last)))}</span></div>
+    <h2>${esc(titulo)}</h2>
+    ${empresa ? `<div class="meta">${esc(empresa)}</div>` : ''}
+    <details class="mail"><summary>${items.length === 1 ? 'Ver e-mail' : `Ver os ${items.length} e-mails`}</summary>
+      <ul class="list history">${history}</ul></details>
+  </article>`;
+}
+
 function viewVagas() {
   const all = S.data.vagas || [];
   const links = retornoPorVaga();
+  const porEmail = candidaturasPorEmail();
   const groups = {
     novas: all.filter(v => !vagaStatus(v.id, links)),
     candidatei: all.filter(v => vagaStatus(v.id, links) === 'candidatei'),
     descartada: all.filter(v => vagaStatus(v.id, links) === 'descartada'),
   };
+  const counts = { ...Object.fromEntries(Object.entries(groups).map(([k, v]) => [k, v.length])) };
+  counts.candidatei += porEmail.length;
   const f = groups[S.vagasFiltro] ? S.vagasFiltro : 'novas';
   const seg = [['novas', 'Novas'], ['candidatei', 'Candidatei'], ['descartada', 'Descartadas']].map(([k, label]) =>
-    `<button data-act="filtro" data-f="${k}" aria-pressed="${f === k}">${label} <span class="n">${groups[k].length}</span></button>`).join('');
-  const items = groups[f].slice(0, 150).map(v => {
+    `<button data-act="filtro" data-f="${k}" aria-pressed="${f === k}">${label} <span class="n">${counts[k]}</span></button>`).join('');
+  const extra = f === 'candidatei' ? porEmail.map(candidaturaCard).join('') : '';
+  const items = extra + groups[f].slice(0, 150).map(v => {
     const st = vagaStatus(v.id, links);
     const isNew = v.encontrada_em > S.vagasVistoAntes && !st;
     const where = [v.empresa, v.local, v.modelo_texto].filter(Boolean).join(' · ');
@@ -441,7 +473,7 @@ function viewVagas() {
       </div></article>`;
   }).join('');
   const empty = { novas: 'Nenhuma vaga sem marcação. As novas aparecem aqui a cada 2 horas.',
-    candidatei: 'Marque "Candidatei" nas vagas em que você se inscreveu. Quando chega um e-mail da candidatura, o bot marca sozinho.',
+    candidatei: 'Nenhuma candidatura ainda. Elas aparecem aqui quando chega o e-mail de inscrição, ou quando você marca "Candidatei" numa vaga.',
     descartada: 'Nenhuma vaga descartada.' }[f];
   return `<h1>Vagas</h1><div class="seg" role="group" aria-label="Filtro">${seg}</div>
     ${items ? `<div class="list">${items}</div>` : `<p class="empty">${empty}</p>`}
