@@ -28,6 +28,7 @@ const S = {
   pushState: 'checking',
   pushId: '',                              // hash da inscrição de push deste aparelho
   route: '',
+  studyOpen: new Set(),                    // baralhos e cartões abertos no Material de estudo (sobrevive ao redesenho)
 };
 
 // ---------- utilidades ----------
@@ -98,11 +99,11 @@ function toast(msg, ms = 3500) {
 }
 
 // ---------- API do GitHub ----------
-async function gh(path, { method = 'GET', body, raw = false } = {}) {
+async function gh(path, { method = 'GET', body, raw = false, blob = false } = {}) {
   const url = `https://api.github.com/repos/${S.cfg.repo}${path ? '/' + path : ''}`;
   const headers = {
     Authorization: `Bearer ${S.cfg.token}`,
-    Accept: raw ? 'application/vnd.github.raw+json' : 'application/vnd.github+json',
+    Accept: raw || blob ? 'application/vnd.github.raw+json' : 'application/vnd.github+json',
     'X-GitHub-Api-Version': '2022-11-28',
   };
   if (body) headers['Content-Type'] = 'application/json';
@@ -113,6 +114,7 @@ async function gh(path, { method = 'GET', body, raw = false } = {}) {
     throw err;
   }
   if (res.status === 204) return null;
+  if (blob) return res.blob();
   return raw ? res.text() : res.json();
 }
 async function readJson(path, fallback) {
@@ -124,6 +126,16 @@ async function getFile(path) {
     const j = await gh(`contents/${encodeURI(path)}`);
     return { data: JSON.parse(b64decode(j.content)), sha: j.sha };
   } catch (e) { if (e.status === 404) return null; throw e; }
+}
+// PDFs de explicação: cartoes/pdf/<id>_<assunto>.pdf no repositório do bot
+async function listPdfs() {
+  try {
+    const out = {};
+    for (const f of await gh('contents/cartoes/pdf')) {
+      if (f.type === 'file' && /\.pdf$/i.test(f.name)) out[f.name.replace(/\.pdf$/i, '').split('_')[0]] = { name: f.name, path: f.path };
+    }
+    return out;
+  } catch (e) { if (e.status === 404) return {}; throw e; }
 }
 function putFile(path, data, sha, message) {
   const body = { message, content: b64encode(JSON.stringify(data, null, 1) + '\n') };
@@ -147,13 +159,14 @@ async function loadAll() {
   renderSync();
   try {
     const cardsFresh = S.data.cards && Date.now() - (S.data.cardsAt || 0) < 6 * 3600e3;
-    const [vagas, retornos, treino, status, push, appcfg, cards, marks] = await Promise.all([
+    const [vagas, retornos, treino, status, push, appcfg, cards, pdfs, marks] = await Promise.all([
       readJson('data/vagas.json', []), readJson('data/retornos.json', []), readJson('data/treino.json', null),
       readJson('data/status.json', null), readJson('data/push.json', null), readJson('data/app-config.json', {}),
-      cardsFresh ? S.data.cards : readJson('cartoes/entrevista.json', null), getFile(MARKS_PATH),
+      cardsFresh ? S.data.cards : readJson('cartoes/entrevista.json', null),
+      cardsFresh && S.data.pdfs ? S.data.pdfs : listPdfs(), getFile(MARKS_PATH),
     ]);
     Object.assign(S.data, { vagas, retornos, treino, status, push, appcfg, at: Date.now() });
-    if (!cardsFresh) Object.assign(S.data, { cards, cardsAt: Date.now() });
+    if (!cardsFresh || !S.data.pdfs) Object.assign(S.data, { cards, pdfs, cardsAt: Date.now() });
     const remote = marks ? marks.data : {};
     S.marks = normMarks(S.dirty ? deepMerge(remote, S.marks) : remote);
     store.set('data', S.data);
@@ -485,9 +498,39 @@ function viewVagas() {
     <p class="meta">As vagas ficam aqui por 30 dias depois de encontradas.</p>`;
 }
 
+function pdfButton(id) {
+  if (!(S.data.pdfs || {})[id]) return '';
+  return `<button class="btn" data-act="pdf" data-id="${esc(id)}">📄 Explicação completa (PDF)</button>`;
+}
+
+// todos os cartões, por baralho: a resposta resumida abre no próprio app e o PDF traz a explicação completa
+function studyLibrary() {
+  const deck = S.data.cards;
+  if (!deck || !Array.isArray(deck.cartoes)) return '';
+  const labels = deck.baralhos || {};
+  const groups = {};
+  for (const c of deck.cartoes) (groups[c.deck] ||= []).push(c);
+  const decks = Object.keys(labels).filter(k => groups[k]).concat(Object.keys(groups).filter(k => !(k in labels)));
+  const nPdf = deck.cartoes.filter(c => (S.data.pdfs || {})[c.id]).length;
+  const body = decks.map(k => {
+    const items = groups[k].map(c => `<details class="study" data-open="${esc(c.id)}"${S.studyOpen.has(c.id) ? ' open' : ''}>
+        <summary>${richText(c.q)}</summary>
+        <ul class="answer">${(c.a || []).map(x => `<li>${richText(x)}</li>`).join('')}</ul>
+        ${c.extra ? `<div class="note"><strong>Se aprofundarem</strong>${richText(c.extra)}</div>` : ''}
+        ${pdfButton(c.id)}
+      </details>`).join('');
+    return `<details class="deck" data-open="deck:${esc(k)}"${S.studyOpen.has('deck:' + k) ? ' open' : ''}>
+      <summary>${esc(labels[k] || k)} <span class="meta">${plural(groups[k].length, 'cartão', 'cartões')}</span></summary>
+      <div class="study-list">${items}</div></details>`;
+  }).join('');
+  return `<section class="panel"><div class="row"><h2>Material de estudo</h2><span class="meta">${nPdf ? `${plural(nPdf, 'PDF', 'PDFs')}` : ''}</span></div>
+    <p class="lede">Todos os cartões: toque na pergunta para ver a resposta resumida e, quando houver, abra o PDF com a explicação completa.</p>
+    ${body}</section>`;
+}
+
 function viewTreino() {
   const info = treinoInfo();
-  if (!info) return `<h1>Treino</h1><p class="empty">Os cartões aparecem depois da próxima execução do bot.</p>`;
+  if (!info) return `<h1>Treino</h1><p class="empty">Os cartões aparecem depois da próxima execução do bot.</p>${studyLibrary()}`;
   const parts = [`<h1>Treino</h1>`, `<section class="panel">${todayPanel(info)}</section>`];
   if (!info.isToday) {
     parts.push(`<div class="panel alert"><p class="lede">Estes são os cartões de ${esc(info.t.dia.split('-').reverse().slice(0, 2).join('/'))}. Os de hoje chegam na próxima execução do bot.</p><button class="btn" data-act="refresh">Atualizar agora</button></div>`);
@@ -499,6 +542,7 @@ function viewTreino() {
     const notes = S.reveal ? [
       c.extra ? `<div class="note"><strong>Se aprofundarem</strong>${richText(c.extra)}</div>` : '',
       c.check ? `<div class="note check"><strong>Confira antes</strong>${richText(c.check)}</div>` : '',
+      pdfButton(c.id),
     ].join('') : '';
     const foot = S.reveal
       ? `${notes}<div class="btns two"><button class="btn warn" data-act="answer" data-id="${esc(c.id)}" data-knew="0">🔁 Preciso revisar</button><button class="btn ok" data-act="answer" data-id="${esc(c.id)}" data-knew="1">✅ Já sei</button></div>`
@@ -517,7 +561,47 @@ function viewTreino() {
     return `<span class="pill ${cls}" title="${esc(info.byId[id].q.replace(/<[^>]+>/g, ''))}">${mark} ${esc(info.labels[info.byId[id].deck] || '')}</span>`;
   }).join('');
   parts.push(`<div class="chips" aria-label="Cartões de hoje">${chips}</div>`);
+  parts.push(studyLibrary());
   return parts.join('');
+}
+
+const pdfBlobs = new Map();  // path → Blob, para não baixar de novo na mesma sessão
+async function openPdf(btn) {
+  const f = (S.data.pdfs || {})[btn.dataset.id];
+  if (!f) return;
+  // no PC abre numa aba nova; ela precisa nascer no clique, senão o navegador bloqueia o pop-up depois da espera.
+  // No celular o Chrome não mostra PDF dentro do app: baixa o arquivo e o Android abre no leitor de PDF.
+  const tab = IS_MOBILE ? null : window.open('', '_blank');
+  const label = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = 'Abrindo…';
+  try {
+    let blob = pdfBlobs.get(f.path);
+    if (!blob) {
+      blob = new Blob([await gh(`contents/${encodeURI(f.path)}`, { blob: true })], { type: 'application/pdf' });
+      pdfBlobs.set(f.path, blob);
+    }
+    const url = URL.createObjectURL(blob);
+    if (tab) {
+      tab.location.href = url;
+    } else {
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = f.name;
+      document.body.append(a);
+      a.click();
+      a.remove();
+      toast('PDF baixado. Toque na notificação de download para abrir.', 4000);
+    }
+    setTimeout(() => URL.revokeObjectURL(url), 10 * 60e3);
+  } catch (e) {
+    if (tab) tab.close();
+    toast(e.status === 404 ? 'PDF não encontrado. Toque em ↻ para atualizar a lista.' : errText(e), 4000);
+    if (e.status === 404) S.data.cardsAt = 0;
+  } finally {
+    btn.disabled = false;
+    btn.textContent = label;
+  }
 }
 
 function devicesList() {
@@ -794,6 +878,8 @@ document.addEventListener('click', e => {
     if (after && after.done >= after.meta && !info.met) toast('Meta de hoje cumprida! 🔥');
     render();
     window.scrollTo(0, 0);
+  } else if (act === 'pdf') {
+    openPdf(el);
   } else if (act === 'refresh') {
     refreshNow();
   } else if (act === 'push-on') {
@@ -828,6 +914,13 @@ document.addEventListener('submit', e => {
   e.preventDefault();
   saveSettings(e.target);
 });
+
+// "toggle" não sobe pela árvore: escuta na captura para lembrar o que está aberto no Material de estudo
+document.addEventListener('toggle', e => {
+  const key = e.target.dataset && e.target.dataset.open;
+  if (!key) return;
+  if (e.target.open) S.studyOpen.add(key); else S.studyOpen.delete(key);
+}, true);
 
 $('#sync').addEventListener('click', () => loadAll());
 window.addEventListener('hashchange', render);
