@@ -168,16 +168,18 @@ async function loadAll() {
   S.error = '';
   renderSync();
   try {
-    const cardsFresh = S.data.cards && Date.now() - (S.data.cardsAt || 0) < 6 * 3600e3;
-    const [vagas, retornos, treino, status, push, appcfg, cartas, respostas, avaliacoes, cards, pdfs, marks] = await Promise.all([
+    const cardsFresh = S.data.cards && S.data.modelos && Date.now() - (S.data.cardsAt || 0) < 30 * 60e3;
+    const [vagas, retornos, treino, status, push, appcfg, cartas, respostas, avaliacoes, ultimos, cards, modelos, pdfs, marks] = await Promise.all([
       readJson('data/vagas.json', []), readJson('data/retornos.json', []), readJson('data/treino.json', null),
       readJson('data/status.json', null), readJson('data/push.json', null), readJson('data/app-config.json', {}),
       readJson('data/cartas.json', {}), readJson('data/respostas.json', {}), readJson('data/avaliacoes.json', {}),
+      lerUltimos(),
       cardsFresh ? S.data.cards : readJson('cartoes/entrevista.json', null),
+      cardsFresh ? S.data.modelos : readJson('cartoes/audio/indice.json', {}),
       cardsFresh && S.data.pdfs ? S.data.pdfs : listPdfs(), getFile(MARKS_PATH),
     ]);
-    Object.assign(S.data, { vagas, retornos, treino, status, push, appcfg, cartas, respostas, avaliacoes, at: Date.now() });
-    if (!cardsFresh || !S.data.pdfs) Object.assign(S.data, { cards, pdfs, cardsAt: Date.now() });
+    Object.assign(S.data, { vagas, retornos, treino, status, push, appcfg, cartas, respostas, avaliacoes, ultimos, at: Date.now() });
+    if (!cardsFresh || !S.data.pdfs) Object.assign(S.data, { cards, modelos, pdfs, cardsAt: Date.now() });
     const remote = marks ? marks.data : {};
     S.marks = normMarks(S.dirty ? deepMerge(remote, S.marks) : remote);
     store.set('data', S.data);
@@ -803,7 +805,12 @@ function vozBlock(card, desde = '') {
   }
   if (st.enviando) return `<div class="voz"><p class="meta">Enviando o áudio…</p></div>`;
   if (st.url) {
-    return `<div class="voz"><audio controls src="${st.url}"></audio>
+    const u = (S.data.ultimos || {})[card];
+    return `<div class="voz">
+      ${u && u.ultimo ? `<div class="comparar-grid"><div>${audioPlayer(u.ultimo.arquivo, 'ultimos', `Seu último áudio (${rel(u.ultimo.em)})`)}
+        <p class="meta">${esc(resumoAval((S.data.avaliacoes || {})[u.ultimo.aid]))}</p></div>
+        <div class="player"><span class="meta">Novo</span><audio controls src="${st.url}"></audio></div></div>`
+        : `<audio controls src="${st.url}"></audio>`}
       <div class="btns"><button class="btn primary" data-act="voz-enviar" ${attr}>Enviar para avaliar</button>
         <button class="btn" data-act="voz-gravar" ${attr}>Gravar de novo</button></div></div>`;
   }
@@ -812,7 +819,72 @@ function vozBlock(card, desde = '') {
   }
   const av = avaliacaoDe(card, desde);
   const gravar = `<button class="btn" data-act="voz-gravar" ${attr}>🎤 ${av ? 'Responder de novo' : 'Responder em voz alta'}</button>`;
-  return `<div class="voz">${av ? avaliacaoView(av[1]) : ''}<div class="btns">${gravar}</div></div>`;
+  return `<div class="voz">${av ? avaliacaoView(av[1]) + compararView(card) : ''}<div class="btns">${gravar}</div></div>`;
+}
+
+// ---------- áudios guardados: o modelo (voz do Windows) e as suas duas últimas tentativas ----------
+// O modelo fica em cartoes/audio/ (modelo_audio.py); as tentativas, no ramo "ultimos" (rodar_pc.py).
+async function lerUltimos() {
+  try { return JSON.parse(await gh('contents/indice.json?ref=ultimos', { raw: true })); }
+  catch (e) { if (e.status === 404) return {}; throw e; }
+}
+
+const audioUrls = {};  // "ref:caminho" -> URL do blob, baixado só quando você toca
+let tocarAgora = '';
+
+function audioPlayer(path, ref, rotulo) {
+  const key = `${ref}:${path}`;
+  if (audioUrls[key]) {
+    return `<div class="player"><span class="meta">${esc(rotulo)}</span><audio controls preload="auto" data-key="${esc(key)}" src="${audioUrls[key]}"></audio></div>`;
+  }
+  return `<button class="btn" data-act="tocar" data-path="${esc(path)}" data-ref="${esc(ref)}">▶ ${esc(rotulo)}</button>`;
+}
+
+async function tocar(btn) {
+  const { path, ref } = btn.dataset;
+  const key = `${ref}:${path}`;
+  btn.disabled = true;
+  try {
+    const blob = await gh(`contents/${encodeURI(path)}${ref ? `?ref=${ref}` : ''}`, { blob: true });
+    audioUrls[key] = URL.createObjectURL(blob);
+    tocarAgora = key;
+    render();
+    const el = document.querySelector(`audio[data-key="${CSS.escape(key)}"]`);
+    if (el && tocarAgora === key) el.play().catch(() => { /* o navegador pode exigir outro toque */ });
+    tocarAgora = '';
+  } catch (e) {
+    btn.disabled = false;
+    toast(e.status === 404 ? 'Áudio ainda não disponível. O PC gera na próxima execução.' : errText(e), 5000);
+  }
+}
+
+function modeloNote(c) {
+  if (!c.fala) return '';
+  const m = (S.data.modelos || {})[c.id];
+  const player = m ? audioPlayer(`cartoes/audio/${m.arquivo}`, '', `Ouvir o modelo${m.segundos ? ` (${Math.round(m.segundos)} s)` : ''}`)
+    : '<span class="meta">O áudio do modelo é gerado pelo PC na próxima execução.</span>';
+  return `<div class="note modelo"><strong>Resposta falada (modelo)</strong>${player}<p class="fala">${esc(c.fala)}</p></div>`;
+}
+
+function resumoAval(a) {
+  if (!a || a.erro) return 'sem avaliação';
+  const p = a.pontos || [];
+  const n = (a.erros || []).length;
+  return `${p.filter(x => x.status === 'coberto').length} de ${p.length} pontos · ${n === 1 ? '1 erro' : `${n} erros`}`;
+}
+
+// a tentativa anterior ao lado da última (áudio e avaliação), quando houver
+function compararView(card) {
+  const u = (S.data.ultimos || {})[card];
+  if (!u || !u.anterior) return '';
+  const av = S.data.avaliacoes || {};
+  return `<details class="comparar"><summary>Comparar com a tentativa anterior</summary>
+    <div class="comparar-grid">
+      <div><strong>Anterior</strong> <span class="meta">${esc(rel(u.anterior.em))}</span>
+        <p class="meta">${esc(resumoAval(av[u.anterior.aid]))}</p>${audioPlayer(u.anterior.arquivo, 'ultimos', 'Ouvir')}</div>
+      <div><strong>Última</strong> <span class="meta">${esc(rel(u.ultimo.em))}</span>
+        <p class="meta">${esc(resumoAval(av[u.ultimo.aid]))}</p>${audioPlayer(u.ultimo.arquivo, 'ultimos', 'Ouvir')}</div>
+    </div></details>`;
 }
 
 function avaliacaoView(a) {
@@ -919,6 +991,7 @@ function studyLibrary() {
     const items = groups[k].map(c => `<details class="study" data-open="${esc(c.id)}"${S.studyOpen.has(c.id) ? ' open' : ''}>
         <summary>${richText(c.q)}</summary>
         <ul class="answer">${(c.a || []).map(x => `<li>${richText(x)}</li>`).join('')}</ul>
+        ${modeloNote(c)}
         ${c.extra ? `<div class="note"><strong>Se aprofundarem</strong>${richText(c.extra)}</div>` : ''}
         ${pdfButton(c.id)}
         ${vozBlock(c.id)}
@@ -944,6 +1017,7 @@ function viewTreino() {
     const pos = info.ids.indexOf(info.next) + 1;
     const answer = S.reveal ? `<ul class="answer anim">${c.a.map(x => `<li>${richText(x)}</li>`).join('')}</ul>` : '';
     const notes = S.reveal ? [
+      modeloNote(c),
       c.extra ? `<div class="note"><strong>Se aprofundarem</strong>${richText(c.extra)}</div>` : '',
       c.check ? `<div class="note check"><strong>Confira antes</strong>${richText(c.check)}</div>` : '',
       pdfButton(c.id),
@@ -1399,6 +1473,8 @@ document.addEventListener('click', e => {
     pergAction(act, el.dataset.id);
   } else if (act.startsWith('compart')) {
     compartAction(act);
+  } else if (act === 'tocar') {
+    tocar(el);
   } else if (act === 'voz-gravar') {
     vozGravar(el.dataset.id);
   } else if (act === 'voz-parar') {

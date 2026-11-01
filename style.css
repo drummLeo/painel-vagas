@@ -225,6 +225,14 @@ select { min-width: 0; max-width: 100%; }
 .avaliacao summary + .carta-texto { margin-top: 8px; }
 .pontos { margin: 0; padding: 0; list-style: none; display: grid; gap: 6px; font-size: 15px; }
 .avaliacao .note ul { margin: 4px 0 0; padding-left: 18px; font-size: 14px; }
+.player { display: grid; gap: 4px; }
+.player audio { width: 100%; }
+.note.modelo { display: grid; gap: 8px; }
+.note.modelo .btn { justify-self: start; }
+.fala { margin: 0; line-height: 1.55; }
+.comparar summary { cursor: pointer; font-weight: 600; font-size: 14px; color: var(--muted); }
+.comparar-grid { display: grid; gap: 12px; margin-top: 8px; }
+.comparar-grid p { margin: 2px 0 6px; }
 .perg { display: grid; gap: 8px; padding-bottom: 12px; border-bottom: 1px solid var(--line); }
 details.banco { display: grid; gap: 10px; }
 details.banco[open] > :not(summary) { margin-top: 10px; }
