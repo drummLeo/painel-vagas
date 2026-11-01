@@ -819,7 +819,7 @@ function vozBlock(card, desde = '') {
   }
   const av = avaliacaoDe(card, desde);
   const gravar = `<button class="btn" data-act="voz-gravar" ${attr}>🎤 ${av ? 'Responder de novo' : 'Responder em voz alta'}</button>`;
-  return `<div class="voz">${av ? avaliacaoView(av[1]) + compararView(card) : ''}<div class="btns">${gravar}</div></div>`;
+  return `<div class="voz">${av ? avaliacaoView(av[1], av[0]) + compararView(card) : ''}<div class="btns">${gravar}</div></div>`;
 }
 
 // ---------- áudios guardados: o modelo (voz do Windows) e as suas duas últimas tentativas ----------
@@ -887,13 +887,21 @@ function compararView(card) {
     </div></details>`;
 }
 
-function avaliacaoView(a) {
+// o áudio guardado desta avaliação (o último ou o anterior do cartão), se ainda estiver guardado
+function audioDaAvaliacao(aid, card) {
+  const u = (S.data.ultimos || {})[card] || {};
+  const guardado = [u.ultimo, u.anterior].find(x => x && x.aid === aid);
+  return guardado ? audioPlayer(guardado.arquivo, 'ultimos', 'Ouvir sua resposta') : '';
+}
+
+function avaliacaoView(a, aid = '') {
   if (a.erro) return `<div class="note check"><strong>Não deu para avaliar</strong>${esc(a.erro)}</div>`;
   const icone = { coberto: '✅', parcial: '🟡', faltou: '❌' };
   const pontos = (a.pontos || []).map(p => `<li>${icone[p.status] || '•'} ${esc(p.ponto)}</li>`).join('');
   const erros = (a.erros || []).map(e => `<li>Você disse “${esc(e.disse)}”; o cartão diz “${esc(e.cartao)}”.</li>`).join('');
   const sug = a.sugestao === 'ja_sei' ? '✅ Já sei' : '🔁 Preciso revisar';
   return `<div class="avaliacao">
+    ${aid ? audioDaAvaliacao(aid, a.card) : ''}
     <details><summary>O que você disse</summary><div class="carta-texto">${esc(a.transcricao || '')}</div></details>
     ${pontos ? `<ul class="pontos">${pontos}</ul>` : ''}
     ${erros ? `<div class="note check"><strong>Diferente do cartão</strong><ul>${erros}</ul></div>` : ''}
