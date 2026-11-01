@@ -140,6 +140,10 @@ details.mail summary { cursor: pointer; color: var(--accent); font-weight: 600; 
 .newdot { width: 8px; height: 8px; border-radius: 50%; background: var(--brand); display: inline-block; margin-right: 6px; vertical-align: middle; }
 
 /* vagas */
+.niveis { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+.niveis button { border: 1px solid var(--line); background: var(--card); color: var(--muted); border-radius: 999px; padding: 6px 12px; font-size: 13px; font-weight: 600; cursor: pointer; }
+.niveis button[aria-pressed="true"] { background: var(--brand-soft); border-color: var(--brand); color: var(--brand); }
+.niveis .n { font-variant-numeric: tabular-nums; opacity: .8; }
 .job h2 { font-size: 16px; }
 .job.done { opacity: .72; }
 

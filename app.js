@@ -22,6 +22,7 @@ const S = {
   error: '',
   reveal: false,
   vagasFiltro: store.get('vagasFiltro', 'novas'),
+  vagasNivel: store.get('vagasNivel', []),       // níveis/cargos marcados no filtro (nenhum = todas)
   retornosFiltro: store.get('retornosFiltro', 'avancos'),
   vagasVisto: store.get('vagasVisto', ''),        // encontrada_em mais recente já vista
   vagasVistoAntes: store.get('vagasVisto', ''),   // o de antes desta visita: marca as novas
@@ -458,6 +459,25 @@ function candidaturaCard(items) {
   </article>`;
 }
 
+// nível e cargo saem do título (sem acento e em minúsculas); uma vaga pode ter mais de um, como "Técnico de Suporte Jr"
+const NIVEIS = [
+  ['estagio', 'Estágio', /\b(estagi\w*|intern|interns|internship)\b/],
+  ['trainee', 'Trainee', /\btrainee\b/],
+  ['junior', 'Júnior', /\b(junior|jr|nivel (i|1)|n1)\b/],
+  ['pleno', 'Pleno', /\b(pleno|mid-level)\b/],
+  ['senior', 'Sênior', /\b(senior|sr)\b/],
+  ['analista', 'Analista', /\b(analista|analyst)\b/],
+  ['tecnico', 'Técnico', /\b(tecnic[oa]|technician)\b/],
+  ['auxiliar', 'Auxiliar / assistente', /\b(auxiliar|assistente|assistant)\b/],
+  ['dev', 'Desenvolvedor', /\b(desenvolvedor\w*|developer|programador\w*|engenheir[oa]\w*|engineer\w*)\b/],
+  ['especialista', 'Especialista', /\b(especialista|specialist)\b/],
+];
+function niveisDe(titulo) {
+  const t = String(titulo || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
+  const out = NIVEIS.filter(([, , re]) => re.test(t)).map(([k]) => k);
+  return out.length ? out : ['outras'];
+}
+
 function viewVagas() {
   const all = S.data.vagas || [];
   const links = retornoPorVaga();
@@ -473,8 +493,21 @@ function viewVagas() {
   const f = groups[S.vagasFiltro] ? S.vagasFiltro : 'novas';
   const seg = [['novas', 'Novas'], ['candidatei', 'Candidatei'], ['descartada', 'Descartadas']].map(([k, label]) =>
     `<button data-act="filtro" data-f="${k}" aria-pressed="${f === k}">${label} <span class="n">${counts[k]}</span></button>`).join('');
-  const extra = f === 'candidatei' ? porEmail.map(candidaturaCard).join('') : '';
-  const items = extra + groups[f].slice(0, 150).map(v => {
+  // filtro de nível/cargo, dentro da aba escolhida; vale também para as candidaturas vindas do e-mail
+  const tituloCand = items => items.map(r => r.cargo).find(Boolean)
+    || ((S.data.vagas || []).find(v => v.id === items.map(r => r.vaga_id).find(Boolean)) || {}).titulo || '';
+  const sel = S.vagasNivel.filter(k => k === 'outras' || NIVEIS.some(([n]) => n === k));
+  const nivelCount = {};
+  const doGrupo = [...groups[f].map(v => niveisDe(v.titulo)), ...(f === 'candidatei' ? porEmail.map(c => niveisDe(tituloCand(c))) : [])];
+  for (const ks of doGrupo) for (const k of ks) nivelCount[k] = (nivelCount[k] || 0) + 1;
+  const passa = titulo => !sel.length || niveisDe(titulo).some(k => sel.includes(k));
+  const opcoes = [...NIVEIS.map(([k, label]) => [k, label]), ['outras', 'Outras']].filter(([k]) => nivelCount[k] || sel.includes(k));
+  const niveis = opcoes.length > 1 || sel.length ? `<div class="niveis" role="group" aria-label="Nível e cargo">
+      <button data-act="nivel" data-f="" aria-pressed="${!sel.length}">Todas</button>
+      ${opcoes.map(([k, label]) => `<button data-act="nivel" data-f="${k}" aria-pressed="${sel.includes(k)}">${label} <span class="n">${nivelCount[k] || 0}</span></button>`).join('')}
+    </div>` : '';
+  const extra = f === 'candidatei' ? porEmail.filter(c => passa(tituloCand(c))).map(candidaturaCard).join('') : '';
+  const items = extra + groups[f].filter(v => passa(v.titulo)).slice(0, 150).map(v => {
     const st = vagaStatus(v.id, links);
     const isNew = v.encontrada_em > S.vagasVistoAntes && !st;
     const where = [v.empresa, v.local, v.modelo_texto].filter(Boolean).join(' · ');
@@ -490,11 +523,13 @@ function viewVagas() {
         <button class="btn warn" data-act="vaga" data-id="${esc(v.id)}" data-v="descartada" aria-pressed="${st === 'descartada'}">Descartar</button>
       </div></article>`;
   }).join('');
-  const empty = { novas: 'Nenhuma vaga sem marcação. As novas aparecem aqui a cada 2 horas.',
+  const emptyAba = { novas: 'Nenhuma vaga sem marcação. As novas aparecem aqui a cada 2 horas.',
     candidatei: 'Nenhuma candidatura ainda. Elas aparecem aqui quando chega o e-mail de inscrição, ou quando você marca "Candidatei" numa vaga.',
     descartada: 'Nenhuma vaga descartada.' }[f];
+  const empty = sel.length && doGrupo.length ?'Nenhuma vaga desta aba com os níveis escolhidos. Toque em "Todas" para ver todas.' : emptyAba;
   return `<h1>Vagas</h1><div class="seg" role="group" aria-label="Filtro">${seg}</div>
-    ${items ? `<div class="list">${items}</div>` : `<p class="empty">${empty}</p>`}
+    ${niveis}
+    ${items ?`<div class="list">${items}</div>` : `<p class="empty">${empty}</p>`}
     <p class="meta">As vagas ficam aqui por 30 dias depois de encontradas.</p>`;
 }
 
@@ -861,6 +896,11 @@ document.addEventListener('click', e => {
   } else if (act === 'filtro') {
     S.vagasFiltro = el.dataset.f;
     store.set('vagasFiltro', S.vagasFiltro);
+    render();
+  } else if (act === 'nivel') {
+    const k = el.dataset.f;
+    S.vagasNivel = !k ? [] : S.vagasNivel.includes(k) ? S.vagasNivel.filter(x => x !== k) : [...S.vagasNivel, k];
+    store.set('vagasNivel', S.vagasNivel);
     render();
   } else if (act === 'rfiltro') {
     S.retornosFiltro = el.dataset.f;
