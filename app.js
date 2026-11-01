@@ -511,7 +511,8 @@ function viewVagas() {
   const items = extra + groups[f].filter(v => passa(v.titulo)).slice(0, 150).map(v => {
     const st = vagaStatus(v.id, links);
     const isNew = v.encontrada_em > S.vagasVistoAntes && !st;
-    const where = [v.empresa, v.local, v.modelo_texto].filter(Boolean).join(' · ');
+    // o bot preenche local e modelo vazios com "Não informado"; aqui eles só ocupariam a linha
+    const where = [v.empresa, v.local, v.modelo_texto].filter(x => x && x !== 'Não informado').join(' · ');
     const r = links[v.id];
     return `<article class="panel job ${st === 'descartada' ? 'done' : ''}">
       ${r ? `<div class="row"><a class="pill ${tipoDe(r).cls}" href="#retornos" style="text-decoration:none">${tipoDe(r).label}</a><span class="meta">${esc(rel(quando(r)))}</span></div>` : ''}
