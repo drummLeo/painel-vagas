@@ -174,6 +174,7 @@ async function loadAll() {
     store.set('marks', S.marks);
     if (S.dirty) scheduleSave(500);
     autoRun();
+    renewPushIfKeyChanged();
   } catch (e) {
     S.error = errText(e);
   }
@@ -810,6 +811,20 @@ async function checkPush() {
     S.pushId = sub ? await endpointId(sub.endpoint) : '';
     S.pushState = sub && Notification.permission === 'granted' ? 'on' : 'off';
   } catch { S.pushState = 'off'; }
+}
+
+// se a chave VAPID do repositório mudou, a inscrição antiga não recebe mais nada: refaz sozinho
+// (a permissão já foi dada, então não aparece pergunta)
+async function renewPushIfKeyChanged() {
+  const key = S.data.appcfg && S.data.appcfg.vapid_public_key;
+  if (!key || S.pushState !== 'on' || Notification.permission !== 'granted') return;
+  try {
+    const reg = await navigator.serviceWorker.getRegistration();
+    const sub = reg && (await reg.pushManager.getSubscription());
+    const cur = sub && sub.options.applicationServerKey && new Uint8Array(sub.options.applicationServerKey);
+    const want = urlB64ToUint8Array(key);
+    if (cur && (cur.length !== want.length || cur.some((b, i) => b !== want[i]))) await enablePush();
+  } catch { /* tenta de novo na próxima carga */ }
 }
 
 async function disablePush() {
