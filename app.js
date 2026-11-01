@@ -196,6 +196,9 @@ function pruneMarks(m) {
   for (const day of Object.keys(m.treino)) if (day < cutoff) delete m.treino[day];
   const vagas = new Set((S.data.vagas || []).map(v => v.id));
   if (vagas.size) for (const id of Object.keys(m.vagas)) if (!vagas.has(id)) delete m.vagas[id];
+  // "nenhuma" só precisa ficar para vaga que o bot liga a um e-mail de candidatura (senão ela voltaria a "Candidatei")
+  const links = retornoPorVaga();
+  for (const [id, st] of Object.entries(m.vagas)) if (st === 'nenhuma' && !links[id]) delete m.vagas[id];
   const retornos = new Set((S.data.retornos || []).map(r => r.id));
   if (retornos.size) for (const id of Object.keys(m.retornos_lidos)) if (!retornos.has(id)) delete m.retornos_lidos[id];
   const cartasCutoff = new Date(Date.now() - CARTAS_KEEP_DAYS * 86400e3).toISOString();
@@ -586,9 +589,11 @@ function viewVagas() {
       <div class="meta">${esc(v.fonte)} · encontrada ${esc(rel(v.encontrada_em))}</div>
       <div class="btns">
         ${v.url ? `<a class="btn primary" href="${esc(v.url)}" target="_blank" rel="noopener">Ver vaga</a>` : ''}
-        <button class="btn ok" data-act="vaga" data-id="${esc(v.id)}" data-v="candidatei" aria-pressed="${st === 'candidatei'}">Candidatei</button>
-        <button class="btn warn" data-act="vaga" data-id="${esc(v.id)}" data-v="descartada" aria-pressed="${st === 'descartada'}">Descartar</button>
-        ${cartaButton(v.id)}
+        ${st === 'descartada'
+          ? `<button class="btn" data-act="vaga" data-id="${esc(v.id)}" data-v="descartada">Restaurar</button>`
+          : `<button class="btn ok" data-act="vaga" data-id="${esc(v.id)}" data-v="candidatei" aria-pressed="${st === 'candidatei'}">Candidatei</button>
+        <button class="btn warn" data-act="vaga" data-id="${esc(v.id)}" data-v="descartada">Descartar</button>
+        ${cartaButton(v.id)}`}
       </div>${S.cartaAberta === v.id ? cartaBlock(v.id) : ''}</article>`;
   }).join('');
   const emptyAba = { novas: 'Nenhuma vaga sem marcação. As novas aparecem aqui a cada 2 horas.',
@@ -1023,8 +1028,10 @@ document.addEventListener('click', e => {
     const { id, v } = el.dataset;
     const links = retornoPorVaga();
     if (vagaStatus(id, links) === v) {
-      // desmarcar: se o bot marcou sozinho (e-mail da candidatura), guarda "nenhuma" para não voltar
-      setMarks(m => { if (links[id]) m.vagas[id] = 'nenhuma'; else delete m.vagas[id]; });
+      // desmarcar ("Restaurar" nas descartadas): grava "nenhuma" em vez de apagar a chave; apagada, ela
+      // voltaria na mescla com o repositório ao salvar. O pruneMarks limpa o "nenhuma" depois de gravado.
+      setMarks(m => { m.vagas[id] = 'nenhuma'; });
+      if (v === 'descartada') toast('Vaga restaurada: voltou para Novas.');
     } else {
       setMarks(m => { m.vagas[id] = v; });
     }
