@@ -173,6 +173,7 @@ async function loadAll() {
     store.set('data', S.data);
     store.set('marks', S.marks);
     if (S.dirty) scheduleSave(500);
+    autoRun();
   } catch (e) {
     S.error = errText(e);
   }
@@ -865,7 +866,18 @@ async function testPush() {
   });
 }
 
+// o agendamento do GitHub atrasa e pula execuções; se o bot está parado há mais de 2h15, o app pede uma
+// (no máximo uma a cada 30 min, para não disparar de novo a cada abertura enquanto ela roda)
+function autoRun() {
+  const bot = S.data.status && Date.parse(S.data.status.atualizado_em);
+  if (!bot || Date.now() - bot < 2.25 * 3600e3 || Date.now() - store.get('autoRunAt', 0) < 30 * 60e3) return;
+  store.set('autoRunAt', Date.now());
+  gh('actions/workflows/vagas.yml/dispatches', { method: 'POST', body: { ref: S.cfg.branch || 'main', inputs: { auto: '1' } } })
+    .then(() => setTimeout(loadAll, 100e3), () => { /* sem permissão de Actions: fica só o agendamento */ });
+}
+
 async function refreshNow() {
+  store.set('autoRunAt', Date.now());
   try {
     await gh('actions/workflows/vagas.yml/dispatches', { method: 'POST', body: { ref: S.cfg.branch || 'main' } });
     toast('Execução do bot pedida. Os dados novos chegam em 1 a 2 minutos.', 5000);
