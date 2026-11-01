@@ -36,6 +36,8 @@ const S = {
   pergAberta: '',                          // vaga com as perguntas de formulário abertas
   pergForm: {},                            // rascunhos: nova pergunta por vaga, edição de resposta e do banco
   bancoAberto: false,
+  voz: {},                                 // gravação pronta para enviar, por cartão ({blob, url})
+  audiosEnviados: store.get('audiosEnviados', {}),  // áudios enviados ainda sem avaliação: aid -> {card, enviado_em}
 };
 
 // ---------- utilidades ----------
@@ -167,14 +169,14 @@ async function loadAll() {
   renderSync();
   try {
     const cardsFresh = S.data.cards && Date.now() - (S.data.cardsAt || 0) < 6 * 3600e3;
-    const [vagas, retornos, treino, status, push, appcfg, cartas, respostas, cards, pdfs, marks] = await Promise.all([
+    const [vagas, retornos, treino, status, push, appcfg, cartas, respostas, avaliacoes, cards, pdfs, marks] = await Promise.all([
       readJson('data/vagas.json', []), readJson('data/retornos.json', []), readJson('data/treino.json', null),
       readJson('data/status.json', null), readJson('data/push.json', null), readJson('data/app-config.json', {}),
-      readJson('data/cartas.json', {}), readJson('data/respostas.json', {}),
+      readJson('data/cartas.json', {}), readJson('data/respostas.json', {}), readJson('data/avaliacoes.json', {}),
       cardsFresh ? S.data.cards : readJson('cartoes/entrevista.json', null),
       cardsFresh && S.data.pdfs ? S.data.pdfs : listPdfs(), getFile(MARKS_PATH),
     ]);
-    Object.assign(S.data, { vagas, retornos, treino, status, push, appcfg, cartas, respostas, at: Date.now() });
+    Object.assign(S.data, { vagas, retornos, treino, status, push, appcfg, cartas, respostas, avaliacoes, at: Date.now() });
     if (!cardsFresh || !S.data.pdfs) Object.assign(S.data, { cards, pdfs, cardsAt: Date.now() });
     const remote = marks ? marks.data : {};
     S.marks = normMarks(S.dirty ? deepMerge(remote, S.marks) : remote);
@@ -778,6 +780,133 @@ function pdfButton(id) {
 }
 
 // todos os cartões, por baralho: a resposta resumida abre no próprio app e o PDF traz a explicação completa
+// ---------- resposta falada (o PC transcreve com o Whisper e avalia com o Ollama; audios.py) ----------
+// O áudio vai para o ramo "audios" do repositório; o resultado volta em data/avaliacoes.json.
+const VOZ_MAX_S = 180;
+const vozRec = { card: '', rec: null, partes: [], inicio: 0, timer: 0 };
+
+function avaliacaoDe(card, desde = '') {
+  return Object.entries(S.data.avaliacoes || {}).filter(([, a]) => a.card === card && (a.avaliada_em || '') >= desde)
+    .sort((a, b) => (b[1].avaliada_em || '').localeCompare(a[1].avaliada_em || ''))[0];
+}
+
+function vozPendente(card) {
+  return Object.entries(S.audiosEnviados).find(([aid, a]) => a.card === card && !(S.data.avaliacoes || {})[aid]);
+}
+
+function vozBlock(card, desde = '') {
+  const st = S.voz[card] || {};
+  const attr = `data-id="${esc(card)}"`;
+  if (vozRec.card === card) {
+    return `<div class="voz"><button class="btn warn" data-act="voz-parar" ${attr}>⏹ Parar <span data-voz-timer>0:00</span></button>
+      <span class="meta">Gravando… até ${VOZ_MAX_S / 60} min.</span></div>`;
+  }
+  if (st.enviando) return `<div class="voz"><p class="meta">Enviando o áudio…</p></div>`;
+  if (st.url) {
+    return `<div class="voz"><audio controls src="${st.url}"></audio>
+      <div class="btns"><button class="btn primary" data-act="voz-enviar" ${attr}>Enviar para avaliar</button>
+        <button class="btn" data-act="voz-gravar" ${attr}>Gravar de novo</button></div></div>`;
+  }
+  if (vozPendente(card)) {
+    return `<div class="voz"><p class="lede">⏳ Avaliando no PC: o Whisper transcreve e o Ollama compara com o cartão. Leva 1 a 3 min, com o PC ligado.</p></div>`;
+  }
+  const av = avaliacaoDe(card, desde);
+  const gravar = `<button class="btn" data-act="voz-gravar" ${attr}>🎤 ${av ? 'Responder de novo' : 'Responder em voz alta'}</button>`;
+  return `<div class="voz">${av ? avaliacaoView(av[1]) : ''}<div class="btns">${gravar}</div></div>`;
+}
+
+function avaliacaoView(a) {
+  if (a.erro) return `<div class="note check"><strong>Não deu para avaliar</strong>${esc(a.erro)}</div>`;
+  const icone = { coberto: '✅', parcial: '🟡', faltou: '❌' };
+  const pontos = (a.pontos || []).map(p => `<li>${icone[p.status] || '•'} ${esc(p.ponto)}</li>`).join('');
+  const erros = (a.erros || []).map(e => `<li>Você disse “${esc(e.disse)}”; o cartão diz “${esc(e.cartao)}”.</li>`).join('');
+  const sug = a.sugestao === 'ja_sei' ? '✅ Já sei' : '🔁 Preciso revisar';
+  return `<div class="avaliacao">
+    <details><summary>O que você disse</summary><div class="carta-texto">${esc(a.transcricao || '')}</div></details>
+    ${pontos ? `<ul class="pontos">${pontos}</ul>` : ''}
+    ${erros ? `<div class="note check"><strong>Diferente do cartão</strong><ul>${erros}</ul></div>` : ''}
+    ${a.comentario ? `<p class="lede">${esc(a.comentario)}</p>` : ''}
+    <p class="meta">Sugestão: <strong>${sug}</strong>. Quem marca é você.</p></div>`;
+}
+
+async function vozGravar(card) {
+  if (vozRec.rec) return toast('Já há uma gravação em andamento.');
+  if (!navigator.mediaDevices || !window.MediaRecorder) return toast('Este navegador não grava áudio.');
+  let stream;
+  try { stream = await navigator.mediaDevices.getUserMedia({ audio: true }); }
+  catch { return toast('Sem acesso ao microfone. Libere nas configurações do app.', 5000); }
+  const tipo = ['audio/webm;codecs=opus', 'audio/ogg;codecs=opus', 'audio/mp4'].find(t => MediaRecorder.isTypeSupported(t)) || '';
+  const rec = new MediaRecorder(stream, tipo ? { mimeType: tipo } : undefined);
+  Object.assign(vozRec, { card, rec, partes: [], inicio: Date.now() });
+  rec.ondataavailable = e => { if (e.data.size) vozRec.partes.push(e.data); };
+  rec.onstop = () => {
+    stream.getTracks().forEach(t => t.stop());
+    clearInterval(vozRec.timer);
+    const blob = new Blob(vozRec.partes, { type: rec.mimeType || 'audio/webm' });
+    const antigo = S.voz[card] && S.voz[card].url;
+    if (antigo) URL.revokeObjectURL(antigo);
+    S.voz[card] = { blob, url: URL.createObjectURL(blob) };
+    Object.assign(vozRec, { card: '', rec: null, partes: [] });
+    render();
+  };
+  rec.start(1000);
+  vozRec.timer = setInterval(() => {
+    const s = Math.floor((Date.now() - vozRec.inicio) / 1000);
+    const el = document.querySelector('[data-voz-timer]');
+    if (el) el.textContent = `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+    if (s >= VOZ_MAX_S) rec.stop();
+  }, 500);
+  render();
+}
+
+async function vozEnviar(card) {
+  const st = S.voz[card];
+  if (!st || !st.blob) return;
+  if (st.blob.size < 2000) return toast('A gravação ficou vazia. Tente de novo.');
+  const ext = /ogg/.test(st.blob.type) ? 'ogg' : /mp4/.test(st.blob.type) ? 'm4a' : 'webm';
+  const aid = `${card}__${new Date().toISOString().replace(/[:.]/g, '-')}`;
+  S.voz[card] = { ...st, enviando: true };
+  render();
+  try {
+    const content = await new Promise((ok, erro) => {
+      const fr = new FileReader();
+      fr.onload = () => ok(String(fr.result).split(',')[1]);
+      fr.onerror = erro;
+      fr.readAsDataURL(st.blob);
+    });
+    const put = () => gh(`contents/audios/${aid}.${ext}`, { method: 'PUT', body: { message: 'painel: resposta falada do treino', content, branch: 'audios' } });
+    try { await put(); } catch (e) {
+      if (e.status !== 404 && e.status !== 422) throw e;
+      // o ramo "audios" ainda não existe (ou foi apagado): cria a partir do principal e tenta de novo
+      const base = await gh(`git/ref/heads/${S.cfg.branch || 'main'}`);
+      await gh('git/refs', { method: 'POST', body: { ref: 'refs/heads/audios', sha: base.object.sha } });
+      await put();
+    }
+    URL.revokeObjectURL(st.url);
+    delete S.voz[card];
+    S.audiosEnviados[aid] = { card, enviado_em: new Date().toISOString() };
+    store.set('audiosEnviados', S.audiosEnviados);
+    toast('Enviado. A avaliação chega em 1 a 3 min, com o PC ligado.', 5000);
+    vozAcompanhar();
+  } catch (e) {
+    S.voz[card] = st;
+    toast(e.status ? errText(e) : `Não deu para enviar: ${e.message}`, 6000);
+  }
+  render();
+}
+
+// enquanto houver áudio sem avaliação, relê os dados de vez em quando (por até 20 min)
+let vozTimer = 0;
+function vozAcompanhar() {
+  clearTimeout(vozTimer);
+  const limite = Date.now() - 20 * 60e3;
+  for (const [aid, a] of Object.entries(S.audiosEnviados)) {
+    if ((S.data.avaliacoes || {})[aid] || Date.parse(a.enviado_em) < limite) delete S.audiosEnviados[aid];
+  }
+  store.set('audiosEnviados', S.audiosEnviados);
+  if (Object.keys(S.audiosEnviados).length) vozTimer = setTimeout(() => loadAll().then(vozAcompanhar), 40e3);
+}
+
 function studyLibrary() {
   const deck = S.data.cards;
   if (!deck || !Array.isArray(deck.cartoes)) return '';
@@ -792,6 +921,7 @@ function studyLibrary() {
         <ul class="answer">${(c.a || []).map(x => `<li>${richText(x)}</li>`).join('')}</ul>
         ${c.extra ? `<div class="note"><strong>Se aprofundarem</strong>${richText(c.extra)}</div>` : ''}
         ${pdfButton(c.id)}
+        ${vozBlock(c.id)}
       </details>`).join('');
     return `<details class="deck" data-open="deck:${esc(k)}"${S.studyOpen.has('deck:' + k) ? ' open' : ''}>
       <summary>${esc(labels[k] || k)} <span class="meta">${plural(groups[k].length, 'cartão', 'cartões')}</span></summary>
@@ -818,9 +948,11 @@ function viewTreino() {
       c.check ? `<div class="note check"><strong>Confira antes</strong>${richText(c.check)}</div>` : '',
       pdfButton(c.id),
     ].join('') : '';
+    // a avaliação falada só conta se for de hoje (de outro dia seria outra tentativa)
+    const voz = vozBlock(c.id, new Date(Date.now() - 18 * 3600e3).toISOString());
     const foot = S.reveal
-      ? `${notes}<div class="btns two"><button class="btn warn" data-act="answer" data-id="${esc(c.id)}" data-knew="0">🔁 Preciso revisar</button><button class="btn ok" data-act="answer" data-id="${esc(c.id)}" data-knew="1">✅ Já sei</button></div>`
-      : `<p class="meta" style="margin:0">Responda em voz alta e só depois veja a resposta.</p><button class="btn primary" data-act="reveal">Mostrar resposta</button>`;
+      ? `${voz}${notes}<div class="btns two"><button class="btn warn" data-act="answer" data-id="${esc(c.id)}" data-knew="0">🔁 Preciso revisar</button><button class="btn ok" data-act="answer" data-id="${esc(c.id)}" data-knew="1">✅ Já sei</button></div>`
+      : `<p class="meta" style="margin:0">Responda em voz alta e só depois veja a resposta. Gravando, o PC confere a sua resposta com o cartão.</p>${voz}<button class="btn primary" data-act="reveal">Mostrar resposta</button>`;
     parts.push(`<article class="flash">
       <div class="flash-head"><span><span class="tag">${esc(info.labels[c.deck] || c.deck)}</span> · ${pos}/${info.ids.length}</span><span>alvo ${esc(c.tempo || '1 min')}</span></div>
       <div class="flash-body"><p class="q">${richText(c.q)}</p>${answer}</div>
@@ -1267,6 +1399,12 @@ document.addEventListener('click', e => {
     pergAction(act, el.dataset.id);
   } else if (act.startsWith('compart')) {
     compartAction(act);
+  } else if (act === 'voz-gravar') {
+    vozGravar(el.dataset.id);
+  } else if (act === 'voz-parar') {
+    if (vozRec.rec) vozRec.rec.stop();
+  } else if (act === 'voz-enviar') {
+    vozEnviar(el.dataset.id);
   } else if (act === 'filtro') {
     S.vagasFiltro = el.dataset.f;
     store.set('vagasFiltro', S.vagasFiltro);
@@ -1367,6 +1505,6 @@ document.addEventListener('visibilitychange', () => {
   }
   render();
   checkPush().then(render);
-  loadAll();
+  loadAll().then(vozAcompanhar);
   lerCompartilhado();
 })();

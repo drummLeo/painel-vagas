@@ -216,6 +216,15 @@ select { min-width: 0; max-width: 100%; }
 .carta .note ul { margin: 4px 0 0; padding-left: 18px; font-size: 14px; }
 .carta label .meta { font-weight: 400; }
 .pergs { margin: 0; padding: 0; list-style: none; gap: 14px; }
+
+/* resposta falada do treino */
+.voz { display: grid; gap: 10px; }
+.voz audio { width: 100%; }
+.avaliacao { display: grid; gap: 8px; }
+.avaliacao summary { cursor: pointer; font-weight: 600; font-size: 14px; color: var(--muted); }
+.avaliacao summary + .carta-texto { margin-top: 8px; }
+.pontos { margin: 0; padding: 0; list-style: none; display: grid; gap: 6px; font-size: 15px; }
+.avaliacao .note ul { margin: 4px 0 0; padding-left: 18px; font-size: 14px; }
 .perg { display: grid; gap: 8px; padding-bottom: 12px; border-bottom: 1px solid var(--line); }
 details.banco { display: grid; gap: 10px; }
 details.banco[open] > :not(summary) { margin-top: 10px; }
