@@ -201,11 +201,13 @@ details.study .note { background: var(--card); }
 
 /* ajustes */
 label { display: grid; gap: 6px; font-weight: 600; font-size: 14px; }
-input[type="text"], input[type="password"], textarea {
+input[type="text"], input[type="password"], textarea, select {
   font: 16px var(--f-body); color: var(--ink); background: var(--desk); border: 1px solid var(--line);
   border-radius: 10px; padding: 11px 12px; width: 100%;
 }
 textarea { resize: vertical; line-height: 1.45; }
+select { min-width: 0; max-width: 100%; }
+.panel.alert-soft { border: 1px solid var(--brand); }
 .help { margin: 0; font-size: 14px; color: var(--muted); }
 
 /* cartas de apresentação */

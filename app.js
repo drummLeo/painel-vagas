@@ -625,6 +625,77 @@ function bancoView() {
   </details>`;
 }
 
+// ---------- "Compartilhar → Painel" no Android ----------
+// O sw.js guarda o texto num cache local (share_target do manifest); aqui ele vira a descrição de uma carta.
+const SHARE_CACHE = 'painel-compartilhado';
+const COMPART_MAX = 8000;  // caracteres guardados no pedido (uma página inteira selecionada pode ter mais)
+const semAcento = s => String(s || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
+
+async function lerCompartilhado() {
+  if (!('caches' in window)) return;
+  try {
+    const cache = await caches.open(SHARE_CACHE);
+    const res = await cache.match('compartilhado');
+    if (!res) return;
+    const d = await res.json();           // ler antes de apagar: apagar o item invalida a resposta
+    await cache.delete('compartilhado');
+    if (!d.text && !d.url && !d.title) return;
+    S.compartilhado = { ...d, vaga: melhorVaga(d) };
+    location.hash = '#vagas';
+    render();
+  } catch { /* sem cache disponível: nada a fazer */ }
+}
+
+// a vaga da lista cujo título mais aparece no texto compartilhado ('' = nenhuma: outra vaga)
+function melhorVaga(d) {
+  const alvo = semAcento(`${d.title} ${d.text} ${d.url}`).slice(0, 4000);
+  let melhor = '', pontos = 1;
+  for (const v of S.data.vagas || []) {
+    const palavras = new Set(semAcento(v.titulo).split(/[^a-z0-9]+/).filter(w => w.length >= 4));
+    const p = [...palavras].filter(w => alvo.includes(w)).length;
+    if (p > pontos) { pontos = p; melhor = v.id; }
+  }
+  return melhor;
+}
+
+function compartilhadoView() {
+  const c = S.compartilhado;
+  if (!c) return '';
+  const texto = (c.text || '').trim();
+  const vagas = (S.data.vagas || []).slice().sort((a, b) => (b.encontrada_em || '').localeCompare(a.encontrada_em || ''));
+  const opcoes = [`<option value="">Outra vaga (fora da lista)</option>`,
+    ...vagas.map(v => `<option value="${esc(v.id)}"${c.vaga === v.id ? ' selected' : ''}>${esc(v.titulo.slice(0, 90))}</option>`)].join('');
+  return `<section class="panel alert-soft"><h2>📥 Texto compartilhado</h2>
+    ${texto ? `<p class="meta">${texto.length} caracteres: “${esc(texto.slice(0, 180))}${texto.length > 180 ? '…' : ''}”</p>`
+      : `<p class="lede">Só veio o link. Para a descrição, selecione o texto da vaga antes de compartilhar. Em vagas da Gupy e de páginas de carreira, o PC busca a descrição pelo link.</p>`}
+    <label>Para qual vaga?<select data-compart="vaga">${opcoes}</select></label>
+    <div class="btns"><button class="btn primary" data-act="compart-carta">Usar na carta</button>
+      <button class="btn" data-act="compart-descartar">Descartar</button></div></section>`;
+}
+
+function compartAction(act) {
+  const c = S.compartilhado;
+  S.compartilhado = null;
+  if (act !== 'compart-carta' || !c) return render();
+  const descricao = (c.text || '').trim().slice(0, COMPART_MAX);
+  let id = c.vaga;
+  if (id) {
+    S.cartaForm[id] = { editando: true, descricao };
+    const st = vagaStatus(id);
+    S.vagasFiltro = st === 'candidatei' || st === 'descartada' ? st : 'novas';  // a aba em que a vaga aparece
+    S.vagasNivel = [];
+  } else {
+    id = `manual:${new Date().toISOString()}`;
+    S.cartaForm[id] = { editando: true, descricao, titulo: (c.title || '').trim(), url: c.url || '' };
+  }
+  S.cartaAberta = id;
+  render();
+  setTimeout(() => {
+    const el = document.querySelector(`.carta [data-carta="${CSS.escape(id)}"]`);
+    if (el) el.closest('article, .carta').scrollIntoView({ block: 'start', behavior: 'smooth' });
+  }, 50);
+}
+
 // cartas para vagas que não estão na lista do bot (achadas em outro lugar)
 function cartasAvulsas() {
   const ids = Object.keys(S.marks.cartas).filter(id => id.startsWith('manual:') && S.marks.cartas[id]);
@@ -638,7 +709,7 @@ function cartasAvulsas() {
         ${p.pedido_em ? `<button class="btn warn" data-act="carta-apagar" data-id="${esc(id)}">Apagar</button>` : ''}</div>
       ${open ? cartaBlock(id) : ''}${S.pergAberta === id ? pergBlock(id) : ''}</article>`;
   }).join('');
-  return `${bancoView()}<div class="btns"><button class="btn" data-act="carta-nova">✉️ Carta para outra vaga</button></div>
+  return `${compartilhadoView()}${bancoView()}<div class="btns"><button class="btn" data-act="carta-nova">✉️ Carta para outra vaga</button></div>
     ${items ? `<div class="list">${items}</div>` : ''}`;
 }
 
@@ -1149,7 +1220,7 @@ function cartaAction(act, id) {
     if (id.startsWith('manual:') && !get('titulo') && !get('empresa')) return toast('Preencha pelo menos a empresa ou a vaga.');
     const novo = { pedido_em: new Date().toISOString(), titulo: get('titulo'), empresa: get('empresa'),
       local: pedido.local || [vaga.local, vaga.modelo_texto].filter(x => x && x !== 'Não informado').join(' · '),
-      url: pedido.url || vaga.url || '', descricao: get('descricao') };
+      url: draft.url || pedido.url || vaga.url || '', descricao: get('descricao') };
     delete S.cartaForm[id];
     setMarks(m => { m.cartas[id] = novo; });
     return toast('Pedido enviado. O PC gera a carta em até 15 min, se estiver ligado.', 5000);
@@ -1194,6 +1265,8 @@ document.addEventListener('click', e => {
     cartaAction(act, el.dataset.id);
   } else if (act.startsWith('perg') || act.startsWith('banco')) {
     pergAction(act, el.dataset.id);
+  } else if (act.startsWith('compart')) {
+    compartAction(act);
   } else if (act === 'filtro') {
     S.vagasFiltro = el.dataset.f;
     store.set('vagasFiltro', S.vagasFiltro);
@@ -1264,6 +1337,10 @@ document.addEventListener('toggle', e => {
   if (e.target.open) S.studyOpen.add(key); else S.studyOpen.delete(key);
 }, true);
 
+document.addEventListener('change', e => {
+  if (e.target.matches('[data-compart="vaga"]') && S.compartilhado) S.compartilhado.vaga = e.target.value;
+});
+
 $('#sync').addEventListener('click', () => loadAll());
 window.addEventListener('hashchange', render);
 document.addEventListener('visibilitychange', () => {
@@ -1291,4 +1368,5 @@ document.addEventListener('visibilitychange', () => {
   render();
   checkPush().then(render);
   loadAll();
+  lerCompartilhado();
 })();

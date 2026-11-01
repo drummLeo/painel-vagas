@@ -1,5 +1,6 @@
 // Service worker do Painel: guarda o app para abrir sem rede e mostra as notificações push.
-const CACHE = 'painel-v15';
+const CACHE = 'painel-v16';
+const SHARE = 'painel-compartilhado';  // texto recebido pelo "Compartilhar" do Android, até o app ler
 const ASSETS = ['./', 'index.html', 'style.css', 'app.js', 'manifest.webmanifest',
   'icons/icon-192.png', 'icons/icon-512.png', 'icons/badge-96.png'];
 
@@ -11,7 +12,7 @@ self.addEventListener('install', event => {
 
 self.addEventListener('activate', event => {
   event.waitUntil(caches.keys()
-    .then(keys => Promise.all(keys.filter(k => k !== CACHE).map(k => caches.delete(k))))
+    .then(keys => Promise.all(keys.filter(k => k !== CACHE && k !== SHARE).map(k => caches.delete(k))))
     .then(() => self.clients.claim()));
 });
 
@@ -20,6 +21,17 @@ self.addEventListener('activate', event => {
 // Os dados vêm da API do GitHub e nunca são guardados aqui.
 self.addEventListener('fetch', event => {
   const url = new URL(event.request.url);
+  // "Compartilhar → Painel" no Android (share_target do manifest): o texto fica só neste aparelho, num
+  // cache que o app lê ao abrir; nada vai para a rede.
+  if (event.request.method === 'POST' && url.origin === self.location.origin && url.pathname.endsWith('/compartilhar')) {
+    event.respondWith((async () => {
+      const form = await event.request.formData();
+      const dado = Object.fromEntries(['title', 'text', 'url'].map(k => [k, String(form.get(k) || '')]));
+      await (await caches.open(SHARE)).put('compartilhado', new Response(JSON.stringify(dado)));
+      return Response.redirect(new URL('./#vagas', self.registration.scope).href, 303);
+    })());
+    return;
+  }
   if (event.request.method !== 'GET' || url.origin !== self.location.origin) return;
   event.respondWith(fetch(url.href, { cache: 'no-cache', credentials: 'same-origin' })
     .then(res => {
