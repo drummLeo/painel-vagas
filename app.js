@@ -12,6 +12,7 @@ const store = {
 };
 const MARKS_PATH = 'app/marcacoes.json';
 const TREINO_KEEP_DAYS = 14;
+const CARTAS_KEEP_DAYS = 60;
 
 const S = {
   cfg: store.get('cfg', null),            // {repo, token, branch}
@@ -30,6 +31,8 @@ const S = {
   pushId: '',                              // hash da inscrição de push deste aparelho
   route: '',
   studyOpen: new Set(),                    // baralhos e cartões abertos no Material de estudo (sobrevive ao redesenho)
+  cartaAberta: '',                         // vaga (ou carta avulsa "manual:…") com a carta aberta
+  cartaForm: {},                           // rascunho do pedido de carta, por id (sobrevive ao redesenho)
 };
 
 // ---------- utilidades ----------
@@ -66,7 +69,7 @@ function plural(n, one, many) { return `${n} ${n === 1 ? one : many}`; }
 function domain(email) { return (email || '').split('@')[1] || ''; }
 function normMarks(m) {
   m = m && typeof m === 'object' ? m : {};
-  return { vagas: m.vagas || {}, retornos_lidos: m.retornos_lidos || {}, treino: m.treino || {} };
+  return { vagas: m.vagas || {}, retornos_lidos: m.retornos_lidos || {}, treino: m.treino || {}, cartas: m.cartas || {} };
 }
 function deepMerge(a, b) {
   if (!a || typeof a !== 'object' || Array.isArray(a)) return b;
@@ -160,13 +163,14 @@ async function loadAll() {
   renderSync();
   try {
     const cardsFresh = S.data.cards && Date.now() - (S.data.cardsAt || 0) < 6 * 3600e3;
-    const [vagas, retornos, treino, status, push, appcfg, cards, pdfs, marks] = await Promise.all([
+    const [vagas, retornos, treino, status, push, appcfg, cartas, cards, pdfs, marks] = await Promise.all([
       readJson('data/vagas.json', []), readJson('data/retornos.json', []), readJson('data/treino.json', null),
       readJson('data/status.json', null), readJson('data/push.json', null), readJson('data/app-config.json', {}),
+      readJson('data/cartas.json', {}),
       cardsFresh ? S.data.cards : readJson('cartoes/entrevista.json', null),
       cardsFresh && S.data.pdfs ? S.data.pdfs : listPdfs(), getFile(MARKS_PATH),
     ]);
-    Object.assign(S.data, { vagas, retornos, treino, status, push, appcfg, at: Date.now() });
+    Object.assign(S.data, { vagas, retornos, treino, status, push, appcfg, cartas, at: Date.now() });
     if (!cardsFresh || !S.data.pdfs) Object.assign(S.data, { cards, pdfs, cardsAt: Date.now() });
     const remote = marks ? marks.data : {};
     S.marks = normMarks(S.dirty ? deepMerge(remote, S.marks) : remote);
@@ -194,6 +198,8 @@ function pruneMarks(m) {
   if (vagas.size) for (const id of Object.keys(m.vagas)) if (!vagas.has(id)) delete m.vagas[id];
   const retornos = new Set((S.data.retornos || []).map(r => r.id));
   if (retornos.size) for (const id of Object.keys(m.retornos_lidos)) if (!retornos.has(id)) delete m.retornos_lidos[id];
+  const cartasCutoff = new Date(Date.now() - CARTAS_KEEP_DAYS * 86400e3).toISOString();
+  for (const [id, p] of Object.entries(m.cartas)) if (!p || (p.pedido_em || '') < cartasCutoff) delete m.cartas[id];
   return m;
 }
 async function saveMarks() {
@@ -480,6 +486,64 @@ function niveisDe(titulo) {
   return out.length ? out : ['outras'];
 }
 
+// ---------- cartas de apresentação ----------
+// O pedido vai em marcacoes.cartas; o PC gera com uma LLM local (cartas.py) e grava em data/cartas.json.
+function cartaEstado(id) {
+  const pedido = S.marks.cartas[id];
+  const feita = (S.data.cartas || {})[id];
+  return { pedido, feita, pronta: !!(pedido && feita && feita.pedido_em === pedido.pedido_em) };
+}
+
+function cartaBlock(id) {
+  const { pedido, feita, pronta } = cartaEstado(id);
+  const draft = S.cartaForm[id] || {};
+  const attr = `data-id="${esc(id)}"`;
+  let body;
+  if (pronta && !draft.editando) {
+    const avisos = feita.avisos || [];
+    body = `<div class="carta-texto">${esc(feita.texto)}</div>
+      ${avisos.length ? `<div class="note check"><strong>Revise antes de enviar</strong><ul>${avisos.map(a => `<li>${esc(a)}</li>`).join('')}</ul></div>` : ''}
+      <div class="meta">Rascunho gerado ${esc(rel(feita.gerada_em))} por ${esc(feita.modelo || 'uma LLM local')}. Confira os fatos antes de enviar.</div>
+      <div class="btns"><button class="btn primary" data-act="carta-copiar" ${attr}>Copiar</button>
+        <button class="btn" data-act="carta-editar" ${attr}>Gerar de novo</button></div>`;
+  } else if (pedido && !draft.editando) {
+    body = `<p class="lede">⏳ Pedida ${esc(rel(pedido.pedido_em))}. O PC gera na próxima execução, em até 15 min, se estiver ligado. Chega uma notificação quando ficar pronta.</p>
+      <div class="btns"><button class="btn" data-act="carta-editar" ${attr}>Editar o pedido</button></div>`;
+  } else {
+    const val = campo => esc(draft[campo] ?? (pedido && pedido[campo]) ?? '');
+    body = `${id.startsWith('manual:') ? `<label>Empresa<input type="text" data-carta="${esc(id)}" data-campo="empresa" value="${val('empresa')}"></label>
+        <label>Vaga<input type="text" data-carta="${esc(id)}" data-campo="titulo" value="${val('titulo')}"></label>` : ''}
+      <label>Descrição da vaga <span class="meta">(recomendado: sem ela, a carta sai genérica)</span>
+        <textarea rows="8" data-carta="${esc(id)}" data-campo="descricao" placeholder="Cole o texto do anúncio: atividades, requisitos e diferenciais.">${val('descricao')}</textarea></label>
+      <div class="btns"><button class="btn primary" data-act="carta-gerar" ${attr}>Gerar carta</button>
+        ${pedido || id.startsWith('manual:') ? `<button class="btn" data-act="carta-cancelar" ${attr}>Cancelar</button>` : ''}</div>`;
+  }
+  return `<div class="carta">${body}</div>`;
+}
+
+function cartaButton(id) {
+  const { pedido, pronta } = cartaEstado(id);
+  const mark = pronta ? ' ✓' : pedido ? ' ⏳' : '';
+  return `<button class="btn" data-act="carta" data-id="${esc(id)}" aria-pressed="${S.cartaAberta === id}">✉️ Carta${mark}</button>`;
+}
+
+// cartas para vagas que não estão na lista do bot (achadas em outro lugar)
+function cartasAvulsas() {
+  const ids = Object.keys(S.marks.cartas).filter(id => id.startsWith('manual:') && S.marks.cartas[id]);
+  if (S.cartaAberta.startsWith('manual:') && !ids.includes(S.cartaAberta)) ids.push(S.cartaAberta);
+  const items = ids.sort().reverse().map(id => {
+    const p = S.marks.cartas[id] || {};
+    const nome = [p.titulo, p.empresa].filter(Boolean).join(' · ') || 'Nova carta';
+    const open = S.cartaAberta === id;
+    return `<article class="panel job"><h2>${esc(nome)}</h2>
+      <div class="btns">${p.pedido_em ? cartaButton(id) : ''}
+        ${p.pedido_em ? `<button class="btn warn" data-act="carta-apagar" data-id="${esc(id)}">Apagar</button>` : ''}</div>
+      ${open ? cartaBlock(id) : ''}</article>`;
+  }).join('');
+  return `<div class="btns"><button class="btn" data-act="carta-nova">✉️ Carta para outra vaga</button></div>
+    ${items ? `<div class="list">${items}</div>` : ''}`;
+}
+
 function viewVagas() {
   const all = S.data.vagas || [];
   const links = retornoPorVaga();
@@ -524,13 +588,14 @@ function viewVagas() {
         ${v.url ? `<a class="btn primary" href="${esc(v.url)}" target="_blank" rel="noopener">Ver vaga</a>` : ''}
         <button class="btn ok" data-act="vaga" data-id="${esc(v.id)}" data-v="candidatei" aria-pressed="${st === 'candidatei'}">Candidatei</button>
         <button class="btn warn" data-act="vaga" data-id="${esc(v.id)}" data-v="descartada" aria-pressed="${st === 'descartada'}">Descartar</button>
-      </div></article>`;
+        ${cartaButton(v.id)}
+      </div>${S.cartaAberta === v.id ? cartaBlock(v.id) : ''}</article>`;
   }).join('');
   const emptyAba = { novas: 'Nenhuma vaga sem marcação. As novas aparecem aqui a cada 2 horas.',
     candidatei: 'Nenhuma candidatura ainda. Elas aparecem aqui quando chega o e-mail de inscrição, ou quando você marca "Candidatei" numa vaga.',
     descartada: 'Nenhuma vaga descartada.' }[f];
   const empty = sel.length && doGrupo.length ?'Nenhuma vaga desta aba com os níveis escolhidos. Toque em "Todas" para ver todas.' : emptyAba;
-  return `<h1>Vagas</h1><div class="seg" role="group" aria-label="Filtro">${seg}</div>
+  return `<h1>Vagas</h1>${cartasAvulsas()}<div class="seg" role="group" aria-label="Filtro">${seg}</div>
     ${niveis}
     ${items ?`<div class="list">${items}</div>` : `<p class="empty">${empty}</p>`}
     <p class="meta">As vagas ficam aqui por 30 dias depois de encontradas.</p>`;
@@ -904,6 +969,48 @@ async function refreshNow() {
   loadAll();
 }
 
+function cartaAction(act, id) {
+  if (act === 'carta') {
+    S.cartaAberta = S.cartaAberta === id ? '' : id;
+  } else if (act === 'carta-nova') {
+    const novo = `manual:${new Date().toISOString()}`;
+    S.cartaAberta = novo;
+    S.cartaForm[novo] = { editando: true };
+  } else if (act === 'carta-editar') {
+    S.cartaForm[id] = { ...S.cartaForm[id], editando: true };
+  } else if (act === 'carta-cancelar') {
+    delete S.cartaForm[id];
+    if (!S.marks.cartas[id]) S.cartaAberta = '';
+  } else if (act === 'carta-gerar') {
+    const draft = S.cartaForm[id] || {};
+    const pedido = S.marks.cartas[id] || {};
+    const vaga = (S.data.vagas || []).find(v => v.id === id) || {};
+    const get = campo => (draft[campo] ?? pedido[campo] ?? vaga[campo] ?? '').trim();
+    if (id.startsWith('manual:') && !get('titulo') && !get('empresa')) return toast('Preencha pelo menos a empresa ou a vaga.');
+    const novo = { pedido_em: new Date().toISOString(), titulo: get('titulo'), empresa: get('empresa'),
+      local: pedido.local || [vaga.local, vaga.modelo_texto].filter(x => x && x !== 'Não informado').join(' · '),
+      url: pedido.url || vaga.url || '', descricao: get('descricao') };
+    delete S.cartaForm[id];
+    setMarks(m => { m.cartas[id] = novo; });
+    return toast('Pedido enviado. O PC gera a carta em até 15 min, se estiver ligado.', 5000);
+  } else if (act === 'carta-copiar') {
+    const texto = ((S.data.cartas || {})[id] || {}).texto || '';
+    return (navigator.clipboard ? navigator.clipboard.writeText(texto) : Promise.reject())
+      .then(() => toast('Carta copiada.'), () => toast('Não deu para copiar; selecione o texto e copie à mão.', 5000));
+  } else if (act === 'carta-apagar') {
+    if (!confirm('Apagar esta carta?')) return;
+    if (S.cartaAberta === id) S.cartaAberta = '';
+    return setMarks(m => { m.cartas[id] = null; });  // null sobrevive à mescla com o remoto; pruneMarks apaga ao gravar
+  }
+  render();
+}
+
+// o rascunho do pedido fica no estado, para não se perder quando a tela é redesenhada
+document.addEventListener('input', e => {
+  const el = e.target.closest('[data-carta]');
+  if (el) (S.cartaForm[el.dataset.carta] ||= { editando: true })[el.dataset.campo] = el.value;
+});
+
 document.addEventListener('click', e => {
   const el = e.target.closest('[data-act]');
   if (!el) return;
@@ -921,6 +1028,8 @@ document.addEventListener('click', e => {
     } else {
       setMarks(m => { m.vagas[id] = v; });
     }
+  } else if (act.startsWith('carta')) {
+    cartaAction(act, el.dataset.id);
   } else if (act === 'filtro') {
     S.vagasFiltro = el.dataset.f;
     store.set('vagasFiltro', S.vagasFiltro);
