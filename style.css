@@ -213,6 +213,16 @@ textarea { resize: vertical; line-height: 1.45; }
 .carta-texto { white-space: pre-wrap; overflow-wrap: anywhere; background: var(--note); border-radius: 8px; padding: 12px 14px; font-size: 15px; line-height: 1.55; }
 .carta .note ul { margin: 4px 0 0; padding-left: 18px; font-size: 14px; }
 .carta label .meta { font-weight: 400; }
+.pergs { margin: 0; padding: 0; list-style: none; gap: 14px; }
+.perg { display: grid; gap: 8px; padding-bottom: 12px; border-bottom: 1px solid var(--line); }
+details.banco { display: grid; gap: 10px; }
+details.banco[open] > :not(summary) { margin-top: 10px; }
+details.banco > summary { cursor: pointer; display: flex; align-items: baseline; gap: 8px; list-style: none; }
+details.banco > summary::-webkit-details-marker { display: none; }
+details.banco > summary::before { content: "▸"; color: var(--muted); }
+details.banco[open] > summary::before { content: "▾"; }
+details.banco > summary h2 { margin: 0; font-size: 17px; }
+details.banco h2 { font-size: 16px; margin: 6px 0 0; }
 .help ol { margin: 6px 0 0; padding-left: 20px; }
 
 .toast {

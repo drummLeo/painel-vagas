@@ -33,6 +33,9 @@ const S = {
   studyOpen: new Set(),                    // baralhos e cartões abertos no Material de estudo (sobrevive ao redesenho)
   cartaAberta: '',                         // vaga (ou carta avulsa "manual:…") com a carta aberta
   cartaForm: {},                           // rascunho do pedido de carta, por id (sobrevive ao redesenho)
+  pergAberta: '',                          // vaga com as perguntas de formulário abertas
+  pergForm: {},                            // rascunhos: nova pergunta por vaga, edição de resposta e do banco
+  bancoAberto: false,
 };
 
 // ---------- utilidades ----------
@@ -69,7 +72,8 @@ function plural(n, one, many) { return `${n} ${n === 1 ? one : many}`; }
 function domain(email) { return (email || '').split('@')[1] || ''; }
 function normMarks(m) {
   m = m && typeof m === 'object' ? m : {};
-  return { vagas: m.vagas || {}, retornos_lidos: m.retornos_lidos || {}, treino: m.treino || {}, cartas: m.cartas || {} };
+  return { vagas: m.vagas || {}, retornos_lidos: m.retornos_lidos || {}, treino: m.treino || {}, cartas: m.cartas || {},
+    perguntas: m.perguntas || {}, banco: m.banco || {} };
 }
 function deepMerge(a, b) {
   if (!a || typeof a !== 'object' || Array.isArray(a)) return b;
@@ -163,14 +167,14 @@ async function loadAll() {
   renderSync();
   try {
     const cardsFresh = S.data.cards && Date.now() - (S.data.cardsAt || 0) < 6 * 3600e3;
-    const [vagas, retornos, treino, status, push, appcfg, cartas, cards, pdfs, marks] = await Promise.all([
+    const [vagas, retornos, treino, status, push, appcfg, cartas, respostas, cards, pdfs, marks] = await Promise.all([
       readJson('data/vagas.json', []), readJson('data/retornos.json', []), readJson('data/treino.json', null),
       readJson('data/status.json', null), readJson('data/push.json', null), readJson('data/app-config.json', {}),
-      readJson('data/cartas.json', {}),
+      readJson('data/cartas.json', {}), readJson('data/respostas.json', {}),
       cardsFresh ? S.data.cards : readJson('cartoes/entrevista.json', null),
       cardsFresh && S.data.pdfs ? S.data.pdfs : listPdfs(), getFile(MARKS_PATH),
     ]);
-    Object.assign(S.data, { vagas, retornos, treino, status, push, appcfg, cartas, at: Date.now() });
+    Object.assign(S.data, { vagas, retornos, treino, status, push, appcfg, cartas, respostas, at: Date.now() });
     if (!cardsFresh || !S.data.pdfs) Object.assign(S.data, { cards, pdfs, cardsAt: Date.now() });
     const remote = marks ? marks.data : {};
     S.marks = normMarks(S.dirty ? deepMerge(remote, S.marks) : remote);
@@ -203,6 +207,8 @@ function pruneMarks(m) {
   if (retornos.size) for (const id of Object.keys(m.retornos_lidos)) if (!retornos.has(id)) delete m.retornos_lidos[id];
   const cartasCutoff = new Date(Date.now() - CARTAS_KEEP_DAYS * 86400e3).toISOString();
   for (const [id, p] of Object.entries(m.cartas)) if (!p || (p.pedido_em || '') < cartasCutoff) delete m.cartas[id];
+  for (const [id, q] of Object.entries(m.perguntas)) if (!q || (q.pedido_em || '') < cartasCutoff) delete m.perguntas[id];
+  for (const [id, b] of Object.entries(m.banco)) if (!b) delete m.banco[id];  // o banco não expira
   return m;
 }
 async function saveMarks() {
@@ -530,6 +536,95 @@ function cartaButton(id) {
   return `<button class="btn" data-act="carta" data-id="${esc(id)}" aria-pressed="${S.cartaAberta === id}">✉️ Carta${mark}</button>`;
 }
 
+// ---------- perguntas de formulário e banco de respostas ----------
+// Pedido em marcacoes.perguntas (id -> {vaga_id, pergunta, limite, pedido_em, final?}); o PC responde em
+// data/respostas.json. O banco (marcacoes.banco) guarda respostas escritas por você e entra como fato.
+const formVal = (key, campo, padrao = '') => (S.pergForm[key] || {})[campo] ?? padrao;
+
+function perguntasDe(vid) {
+  return Object.entries(S.marks.perguntas).filter(([, q]) => q && q.vaga_id === vid)
+    .sort((a, b) => (a[1].pedido_em || '').localeCompare(b[1].pedido_em || ''));
+}
+
+function pergButton(vid) {
+  const qs = perguntasDe(vid);
+  const pend = qs.some(([qid, q]) => !q.final && ((S.data.respostas || {})[qid] || {}).pedido_em !== q.pedido_em);
+  return `<button class="btn" data-act="perg" data-id="${esc(vid)}" aria-pressed="${S.pergAberta === vid}">❓ Perguntas${qs.length ? ` ${qs.length}${pend ? ' ⏳' : ''}` : ''}</button>`;
+}
+
+function avisosNote(avisos) {
+  return avisos.length ? `<div class="note check"><strong>Revise antes de enviar</strong><ul>${avisos.map(a => `<li>${esc(a)}</li>`).join('')}</ul></div>` : '';
+}
+
+function pergBlock(vid) {
+  const items = perguntasDe(vid).map(([qid, q]) => {
+    const r = (S.data.respostas || {})[qid];
+    const pronta = r && r.pedido_em === q.pedido_em;
+    const ed = S.pergForm[`edit:${qid}`];
+    const attr = `data-id="${esc(qid)}"`;
+    const limite = q.limite || 1500;
+    let corpo;
+    if (ed && ed.editando) {
+      corpo = `<textarea rows="5" data-form="${esc(`edit:${qid}`)}" data-campo="texto">${esc(ed.texto)}</textarea>
+        <div class="meta">Limite: ${limite} caracteres</div>
+        <div class="btns"><button class="btn primary" data-act="perg-salvar" ${attr}>Salvar no banco</button>
+          <button class="btn" data-act="perg-cancelar" ${attr}>Cancelar</button></div>`;
+    } else if (q.final || pronta) {
+      const texto = q.final || r.texto;
+      corpo = `<div class="carta-texto">${esc(texto)}</div>
+        <div class="meta">${semMarcador(texto).length} / ${limite} caracteres${q.final ? ' · a sua versão, salva no banco' : ''}</div>
+        ${q.final ? '' : avisosNote(r.avisos || [])}
+        <div class="btns"><button class="btn primary" data-act="perg-copiar" ${attr}>Copiar</button>
+          <button class="btn" data-act="perg-editar" ${attr}>Editar e salvar no banco</button>
+          <button class="btn warn" data-act="perg-apagar" ${attr}>Apagar</button></div>`;
+    } else {
+      corpo = `<p class="lede">⏳ Pedida ${esc(rel(q.pedido_em))}. O PC responde em até 15 min, se estiver ligado.</p>
+        <div class="btns"><button class="btn warn" data-act="perg-apagar" ${attr}>Apagar</button></div>`;
+    }
+    return `<li class="perg"><strong>${esc(q.pergunta)}</strong>${corpo}</li>`;
+  }).join('');
+  const nk = esc(`nova:${vid}`);
+  return `<div class="carta">
+    ${items ? `<ul class="list pergs">${items}</ul>` : ''}
+    <label>Pergunta do formulário <span class="meta">(várias: separe com uma linha em branco)</span>
+      <textarea rows="3" data-form="${nk}" data-campo="pergunta" placeholder="Ex.: Possui conhecimento em manutenção de computadores?">${esc(formVal(`nova:${vid}`, 'pergunta'))}</textarea></label>
+    <label>Limite de caracteres<input type="text" inputmode="numeric" data-form="${nk}" data-campo="limite" value="${esc(formVal(`nova:${vid}`, 'limite', '1500'))}"></label>
+    <div class="btns"><button class="btn primary" data-act="perg-gerar" data-id="${esc(vid)}">Gerar resposta</button></div>
+    <p class="help">A resposta usa só os seus fatos e o banco. Se eles não cobrirem a pergunta, ela vem com [COMPLETE] para você escrever, e o que você salvar no banco vale para as próximas vagas.</p>
+  </div>`;
+}
+
+function bancoView() {
+  const itens = Object.entries(S.marks.banco).filter(([, b]) => b)
+    .sort((a, b) => (b[1].salvo_em || '').localeCompare(a[1].salvo_em || ''));
+  const linhas = itens.map(([bid, b]) => {
+    const key = `banco:${bid}`;
+    const ed = S.pergForm[key];
+    const attr = `data-id="${esc(bid)}"`;
+    if (ed && ed.editando) {
+      return `<li class="perg"><label>Pergunta<input type="text" data-form="${esc(key)}" data-campo="pergunta" value="${esc(ed.pergunta)}"></label>
+        <label>Resposta<textarea rows="4" data-form="${esc(key)}" data-campo="resposta">${esc(ed.resposta)}</textarea></label>
+        <div class="btns"><button class="btn primary" data-act="banco-salvar" ${attr}>Salvar</button>
+          <button class="btn" data-act="banco-cancelar" ${attr}>Cancelar</button></div></li>`;
+    }
+    return `<li class="perg"><strong>${esc(b.pergunta)}</strong><div class="carta-texto">${esc(b.resposta)}</div>
+      <div class="btns"><button class="btn" data-act="banco-editar" ${attr}>Editar</button>
+        <button class="btn warn" data-act="banco-apagar" ${attr}>Apagar</button></div></li>`;
+  }).join('');
+  return `<details class="panel banco" data-banco ${S.bancoAberto ? 'open' : ''}>
+    <summary><h2>📚 Banco de respostas</h2><span class="meta">${itens.length}</span></summary>
+    <p class="help">Respostas escritas por você. O PC usa como fatos nas cartas e nas perguntas.</p>
+    ${linhas ? `<ul class="list pergs">${linhas}</ul>` : ''}
+    <label>Nova pergunta<input type="text" data-form="banco:novo" data-campo="pergunta" value="${esc(formVal('banco:novo', 'pergunta'))}"></label>
+    <label>Sua resposta<textarea rows="3" data-form="banco:novo" data-campo="resposta">${esc(formVal('banco:novo', 'resposta'))}</textarea></label>
+    <div class="btns"><button class="btn" data-act="banco-adicionar">Adicionar ao banco</button></div>
+    <h2>Perguntas sem vaga</h2>
+    <p class="help">Para um formulário de vaga que não está na lista: a resposta sai sem o contexto da vaga.</p>
+    <div class="btns">${pergButton('geral')}</div>
+    ${S.pergAberta === 'geral' ? pergBlock('geral') : ''}
+  </details>`;
+}
+
 // cartas para vagas que não estão na lista do bot (achadas em outro lugar)
 function cartasAvulsas() {
   const ids = Object.keys(S.marks.cartas).filter(id => id.startsWith('manual:') && S.marks.cartas[id]);
@@ -539,11 +634,11 @@ function cartasAvulsas() {
     const nome = [p.titulo, p.empresa].filter(Boolean).join(' · ') || 'Nova carta';
     const open = S.cartaAberta === id;
     return `<article class="panel job"><h2>${esc(nome)}</h2>
-      <div class="btns">${p.pedido_em ? cartaButton(id) : ''}
+      <div class="btns">${p.pedido_em ? cartaButton(id) + pergButton(id) : ''}
         ${p.pedido_em ? `<button class="btn warn" data-act="carta-apagar" data-id="${esc(id)}">Apagar</button>` : ''}</div>
-      ${open ? cartaBlock(id) : ''}</article>`;
+      ${open ? cartaBlock(id) : ''}${S.pergAberta === id ? pergBlock(id) : ''}</article>`;
   }).join('');
-  return `<div class="btns"><button class="btn" data-act="carta-nova">✉️ Carta para outra vaga</button></div>
+  return `${bancoView()}<div class="btns"><button class="btn" data-act="carta-nova">✉️ Carta para outra vaga</button></div>
     ${items ? `<div class="list">${items}</div>` : ''}`;
 }
 
@@ -593,8 +688,8 @@ function viewVagas() {
           ? `<button class="btn" data-act="vaga" data-id="${esc(v.id)}" data-v="descartada">Restaurar</button>`
           : `<button class="btn ok" data-act="vaga" data-id="${esc(v.id)}" data-v="candidatei" aria-pressed="${st === 'candidatei'}">Candidatei</button>
         <button class="btn warn" data-act="vaga" data-id="${esc(v.id)}" data-v="descartada">Descartar</button>
-        ${cartaButton(v.id)}`}
-      </div>${S.cartaAberta === v.id ? cartaBlock(v.id) : ''}</article>`;
+        ${cartaButton(v.id)}${pergButton(v.id)}`}
+      </div>${S.cartaAberta === v.id ? cartaBlock(v.id) : ''}${S.pergAberta === v.id ? pergBlock(v.id) : ''}</article>`;
   }).join('');
   const emptyAba = { novas: 'Nenhuma vaga sem marcação. As novas aparecem aqui a cada 2 horas.',
     candidatei: 'Nenhuma candidatura ainda. Elas aparecem aqui quando chega o e-mail de inscrição, ou quando você marca "Candidatei" numa vaga.',
@@ -974,6 +1069,66 @@ async function refreshNow() {
   loadAll();
 }
 
+function copiar(texto, ok) {
+  return (navigator.clipboard ? navigator.clipboard.writeText(texto) : Promise.reject())
+    .then(() => toast(ok), () => toast('Não deu para copiar; selecione o texto e copie à mão.', 5000));
+}
+
+const semMarcador = t => (t || '').replace(/^\[COMPLETE\]\s*/, '');
+
+function pergAction(act, id) {
+  const agora = new Date().toISOString();
+  const resposta = qid => semMarcador(S.marks.perguntas[qid].final || ((S.data.respostas || {})[qid] || {}).texto);
+  if (act === 'perg') {
+    S.pergAberta = S.pergAberta === id ? '' : id;
+  } else if (act === 'perg-gerar') {
+    const f = S.pergForm[`nova:${id}`] || {};
+    const textos = (f.pergunta || '').split(/\n\s*\n/).map(s => s.trim()).filter(Boolean);
+    if (!textos.length) return toast('Escreva a pergunta.');
+    const limite = parseInt(f.limite, 10) || 1500;
+    delete S.pergForm[`nova:${id}`];
+    setMarks(m => textos.forEach((pergunta, i) => {
+      m.perguntas[`${id}|${agora}|${i}`] = { vaga_id: id, pergunta, limite, pedido_em: agora };
+    }));
+    return toast(`${textos.length === 1 ? 'Pergunta enviada' : `${textos.length} perguntas enviadas`}. O PC responde em até 15 min, se estiver ligado.`, 5000);
+  } else if (act === 'perg-copiar') {
+    const incompleta = !S.marks.perguntas[id].final && /^\[COMPLETE\]/.test(((S.data.respostas || {})[id] || {}).texto || '');
+    return copiar(resposta(id), incompleta ? 'Copiada, mas está incompleta: complete antes de enviar.' : 'Resposta copiada.');
+  } else if (act === 'perg-editar') {
+    S.pergForm[`edit:${id}`] = { editando: true, texto: resposta(id) };
+  } else if (act === 'perg-cancelar') {
+    delete S.pergForm[`edit:${id}`];
+  } else if (act === 'perg-salvar') {
+    const texto = (S.pergForm[`edit:${id}`].texto || '').trim();
+    if (!texto) return toast('Escreva a resposta.');
+    const q = S.marks.perguntas[id];
+    delete S.pergForm[`edit:${id}`];
+    setMarks(m => {
+      m.perguntas[id] = { ...q, final: texto };
+      m.banco[`b:${id}`] = { pergunta: q.pergunta, resposta: texto, salvo_em: agora };  // mesma pergunta: substitui
+    });
+    return toast('Salva no banco: vale para as próximas cartas e perguntas.');
+  } else if (act === 'perg-apagar') {
+    return setMarks(m => { m.perguntas[id] = null; });  // null sobrevive à mescla; pruneMarks apaga ao gravar
+  } else if (act === 'banco-editar') {
+    const b = S.marks.banco[id];
+    S.pergForm[`banco:${id}`] = { editando: true, pergunta: b.pergunta, resposta: b.resposta };
+  } else if (act === 'banco-cancelar') {
+    delete S.pergForm[`banco:${id}`];
+  } else if (act === 'banco-salvar' || act === 'banco-adicionar') {
+    const key = act === 'banco-salvar' ? `banco:${id}` : 'banco:novo';
+    const f = S.pergForm[key] || {};
+    const pergunta = (f.pergunta || '').trim(), resp = (f.resposta || '').trim();
+    if (!pergunta || !resp) return toast('Preencha a pergunta e a resposta.');
+    delete S.pergForm[key];
+    return setMarks(m => { m.banco[act === 'banco-salvar' ? id : `b:${agora}`] = { pergunta, resposta: resp, salvo_em: agora }; });
+  } else if (act === 'banco-apagar') {
+    if (!confirm('Apagar esta resposta do banco?')) return;
+    return setMarks(m => { m.banco[id] = null; });
+  }
+  render();
+}
+
 function cartaAction(act, id) {
   if (act === 'carta') {
     S.cartaAberta = S.cartaAberta === id ? '' : id;
@@ -999,9 +1154,7 @@ function cartaAction(act, id) {
     setMarks(m => { m.cartas[id] = novo; });
     return toast('Pedido enviado. O PC gera a carta em até 15 min, se estiver ligado.', 5000);
   } else if (act === 'carta-copiar') {
-    const texto = ((S.data.cartas || {})[id] || {}).texto || '';
-    return (navigator.clipboard ? navigator.clipboard.writeText(texto) : Promise.reject())
-      .then(() => toast('Carta copiada.'), () => toast('Não deu para copiar; selecione o texto e copie à mão.', 5000));
+    return copiar(((S.data.cartas || {})[id] || {}).texto || '', 'Carta copiada.');
   } else if (act === 'carta-apagar') {
     if (!confirm('Apagar esta carta?')) return;
     if (S.cartaAberta === id) S.cartaAberta = '';
@@ -1014,6 +1167,8 @@ function cartaAction(act, id) {
 document.addEventListener('input', e => {
   const el = e.target.closest('[data-carta]');
   if (el) (S.cartaForm[el.dataset.carta] ||= { editando: true })[el.dataset.campo] = el.value;
+  const f = e.target.closest('[data-form]');
+  if (f) (S.pergForm[f.dataset.form] ||= {})[f.dataset.campo] = f.value;
 });
 
 document.addEventListener('click', e => {
@@ -1037,6 +1192,8 @@ document.addEventListener('click', e => {
     }
   } else if (act.startsWith('carta')) {
     cartaAction(act, el.dataset.id);
+  } else if (act.startsWith('perg') || act.startsWith('banco')) {
+    pergAction(act, el.dataset.id);
   } else if (act === 'filtro') {
     S.vagasFiltro = el.dataset.f;
     store.set('vagasFiltro', S.vagasFiltro);
@@ -1101,6 +1258,7 @@ document.addEventListener('submit', e => {
 
 // "toggle" não sobe pela árvore: escuta na captura para lembrar o que está aberto no Material de estudo
 document.addEventListener('toggle', e => {
+  if (e.target.matches && e.target.matches('[data-banco]')) S.bancoAberto = e.target.open;
   const key = e.target.dataset && e.target.dataset.open;
   if (!key) return;
   if (e.target.open) S.studyOpen.add(key); else S.studyOpen.delete(key);
