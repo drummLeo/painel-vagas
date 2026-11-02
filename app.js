@@ -483,7 +483,7 @@ function gmailButton(r, cls) {
 // Texto do e-mail guardado pelo bot: abre aqui mesmo, sem depender do Gmail achar a mensagem.
 function mailDetails(r) {
   if (!r.texto) return '';
-  return `<details class="mail"><summary>Ver e-mail</summary><div class="mailtext">${esc(r.texto)}</div></details>`;
+  return `<details class="mail"${aberto(`mail:${r.id}`)}><summary>Ver e-mail</summary><div class="mailtext">${esc(r.texto)}</div></details>`;
 }
 
 function inscricaoRow(r) {
@@ -537,7 +537,7 @@ function viewRetornos() {
   if (f !== 'acoes') autoRead(groups[f]);
   // nas ações, as resolvidas ficam guardadas, com "Desfazer" para o caso de ter marcado sem querer
   const feitas = f === 'acoes' ? acoesPendentes(true) : [];
-  const resolvidas = feitas.length ? `<details class="feitas"><summary>Resolvidas · ${feitas.length}</summary><div class="list">${feitas.map(({ chave, pedido }) =>
+  const resolvidas = feitas.length ? `<details class="feitas"${aberto('feitas')}><summary>Resolvidas · ${feitas.length}</summary><div class="list">${feitas.map(({ chave, pedido }) =>
     `<div class="acao-linha"><div><span class="pill ${tipoDe(pedido).cls}">${tipoDe(pedido).label}</span> <b>${esc(quemDoProcesso(pedido))}</b>
       <div class="meta">${esc(pedido.assunto || '')}</div></div>
       <button class="btn" data-act="acao-desfazer" data-chave="${esc(chave)}">Desfazer</button></div>`).join('')}</div></details>` : '';
@@ -571,7 +571,7 @@ function candidaturaCard(items) {
     <h2>${esc(titulo)}</h2>
     ${empresa ? `<div class="meta">${esc(empresa)}</div>` : ''}
     ${vaga && vaga.url ? `<div class="btns"><a class="btn" href="${esc(vaga.url)}" target="_blank" rel="noopener">Ver vaga</a></div>` : ''}
-    <details class="mail"><summary>${items.length === 1 ? 'Ver e-mail' : `Ver os ${items.length} e-mails`}</summary>
+    <details class="mail"${aberto(`mail:${items[0].id}`)}><summary>${items.length === 1 ? 'Ver e-mail' : `Ver os ${items.length} e-mails`}</summary>
       <ul class="list history">${history}</ul></details>
   </article>`;
 }
@@ -1063,12 +1063,16 @@ function notaView(a) {
   return `<div class="nota-aval"><span class="pill ${cls}">Nota ${notaTexto(a.nota)}<small>/10</small></span>${a.nota_motivo ? `<span class="meta">${esc(a.nota_motivo)}</span>` : ''}</div>`;
 }
 
+// as seções que abrem e fecham lembram o estado: o app redesenha a tela (ao tocar um áudio, por exemplo)
+// e, sem isso, elas fechavam sozinhas. O registro fica em S.studyOpen, pelo "toggle" (data-open).
+const aberto = k => ` data-open="${esc(k)}"${S.studyOpen.has(k) ? ' open' : ''}`;
+
 // a tentativa anterior ao lado da última (áudio e avaliação), quando houver
 function compararView(card) {
   const u = (S.data.ultimos || {})[card];
   if (!u || !u.anterior) return '';
   const av = S.data.avaliacoes || {};
-  return `<details class="comparar"><summary>Comparar com a tentativa anterior</summary>
+  return `<details class="comparar"${aberto(`comparar:${card}`)}><summary>Comparar com a tentativa anterior</summary>
     <div class="comparar-grid">
       <div><strong>Anterior</strong> <span class="meta">${esc(rel(u.anterior.em))}</span>
         <p class="meta">${esc(resumoAval(av[u.anterior.aid]))}</p>${audioPlayer(u.anterior.arquivo, 'ultimos', 'Ouvir')}</div>
@@ -1093,7 +1097,7 @@ function avaliacaoView(a, aid = '') {
   return `<div class="avaliacao">
     ${notaView(a)}
     ${aid ? audioDaAvaliacao(aid, a.card) : ''}
-    <details><summary>O que você disse</summary><div class="carta-texto">${esc(a.transcricao || '')}</div></details>
+    <details${aberto(`disse:${aid || a.avaliada_em}`)}><summary>O que você disse</summary><div class="carta-texto">${esc(a.transcricao || '')}</div></details>
     ${pontos ? `<ul class="pontos">${pontos}</ul>` : ''}
     ${erros ? `<div class="note check"><strong>Diferente do cartão</strong><ul>${erros}</ul></div>` : ''}
     ${a.comentario ? `<p class="lede">${esc(a.comentario)}</p>` : ''}
