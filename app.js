@@ -1485,7 +1485,19 @@ function render() {
   for (const a of document.querySelectorAll('.tabs a')) {
     if (a.dataset.tab === (name === 'livro' ? 'treino' : name)) a.setAttribute('aria-current', 'page'); else a.removeAttribute('aria-current');
   }
+  // players já usados (tocando ou com posição) sobrevivem ao redesenho: sem isso, uma atualização dos dados no
+  // meio da reprodução trocava o player por um novo, que parava e voltava ao início
+  const players = [...document.querySelectorAll('#view audio')].filter(a => !a.paused || a.currentTime > 0)
+    .map(a => ({ el: a, src: a.getAttribute('src'), tocava: !a.paused }));
   $('#view').innerHTML = !S.cfg && name !== 'ajustes' ? viewWelcome() : views[name]();
+  for (const p of players) {
+    const novo = [...document.querySelectorAll('#view audio')].find(a => a.getAttribute('src') === p.src && a !== p.el && !a.dataset.mantido);
+    if (!novo) continue;
+    novo.replaceWith(p.el);  // o mesmo elemento, na mesma posição; sair da página o pausa, então volta a tocar
+    p.el.dataset.mantido = '1';
+    if (p.tocava) p.el.play().catch(() => {});
+  }
+  for (const a of document.querySelectorAll('#view audio[data-mantido]')) delete a.dataset.mantido;
   $('#view').dataset.livro = name === 'livro' && S.livro ? S.livro.sha : '';
   // volta ao ponto onde parou de ler: ao entrar no livro, ou quando ele termina de carregar
   if (name === 'livro' && S.livro && (entrouNoLivro || !S.livroPosto)) {
