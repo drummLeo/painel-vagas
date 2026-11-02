@@ -1932,6 +1932,16 @@ document.addEventListener('submit', e => {
   saveSettings(e.target);
 });
 
+// O webm que o navegador grava vem sem a duração: o player fica sem saber o tamanho e a barra não acompanha.
+// O Chrome só descobre a duração depois de pular para o fim; então pula e volta ao começo.
+document.addEventListener('loadedmetadata', e => {
+  const a = e.target;
+  if (!(a instanceof HTMLAudioElement) || Number.isFinite(a.duration)) return;
+  const volta = () => { a.removeEventListener('timeupdate', volta); a.currentTime = 0; };
+  a.addEventListener('timeupdate', volta);
+  a.currentTime = 1e101;
+}, true);
+
 // "toggle" não sobe pela árvore: escuta na captura para lembrar o que está aberto no Material de estudo
 document.addEventListener('toggle', e => {
   if (e.target.matches && e.target.matches('[data-banco]')) S.bancoAberto = e.target.open;
