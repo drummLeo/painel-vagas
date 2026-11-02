@@ -149,7 +149,7 @@ details.mail summary { cursor: pointer; color: var(--accent); font-weight: 600; 
 .acao-linha { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 8px 0; border-top: 1px solid var(--line); }
 .acao-linha > div { min-width: 0; }
 .acao-linha b { overflow-wrap: anywhere; }
-.acao-linha .btn { flex: none; min-height: 36px; padding: 0 12px; }
+.acao-linha .btn { flex: none; min-height: 36px; padding: 0 12px; font-size: 14px; white-space: nowrap; }
 details.feitas > summary { cursor: pointer; color: var(--muted); font-weight: 600; padding: 6px 0; }
 /* palavras-chave da busca */
 details.busca > summary { cursor: pointer; display: flex; flex-wrap: wrap; gap: 4px 10px; align-items: baseline; list-style: none; }

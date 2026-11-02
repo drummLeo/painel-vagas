@@ -400,9 +400,12 @@ function acaoCard({ chave, pedido, items }) {
     <div class="meta">${esc(pedido.assunto || '(sem assunto)')}</div>
     ${pedido.trecho ? `<p class="quote">“${esc(pedido.trecho)}”</p>` : ''}
     ${mailDetails(pedido)}
-    <div class="btns">${gmailButton(pedido, 'btn primary')}
-      <button class="btn ok" data-act="acao-feita" data-chave="${esc(chave)}" data-quando="${esc(quando(pedido) || '')}">✓ Feito</button></div>
+    <div class="btns">${gmailButton(pedido, 'btn primary')}${feitoButton(chave, pedido)}</div>
   </article>`;
+}
+// botão neutro e com verbo: "✓ Feito" em verde parecia um selo dizendo que a tarefa já estava feita
+function feitoButton(chave, pedido) {
+  return `<button class="btn" data-act="acao-feita" data-chave="${esc(chave)}" data-quando="${esc(quando(pedido) || '')}">Marcar como feito</button>`;
 }
 // versão curta, para o topo do Início
 function acaoLinha({ chave, pedido, items }) {
@@ -410,7 +413,7 @@ function acaoLinha({ chave, pedido, items }) {
   return `<div class="acao-linha">
     <div><span class="pill ${tipo.cls}">${tipo.label}</span> <b>${esc(quemDoProcesso(pedido))}</b>
       <div class="meta">${items.some(isUnread) ? '<span class="newdot"></span>' : ''}${esc(ACAO_TEXTO[pedido.tipo] || 'Responder')} · ${esc(rel(quando(pedido)))}</div></div>
-    <button class="btn ok" data-act="acao-feita" data-chave="${esc(chave)}" data-quando="${esc(quando(pedido) || '')}">✓ Feito</button>
+    ${feitoButton(chave, pedido)}
   </div>`;
 }
 
@@ -518,7 +521,7 @@ function viewRetornos() {
     return `<button data-act="rfiltro" data-f="${k}" aria-pressed="${f === k}">${novos ? '<span class="newdot"></span>' : ''}${label} <span class="n">${groups[k].length}</span></button>`;
   }).join('');
   const lede = {
-    acoes: 'Processos que esperam algo de você: um teste, marcar uma entrevista, terminar uma inscrição. Marque “Feito” quando resolver.',
+    acoes: 'Processos que esperam algo de você: um teste, marcar uma entrevista, terminar uma inscrição. Quando resolver, toque em “Marcar como feito”.',
     avancos: 'Aprovações, convites para entrevista e testes.',
     inscricoes: 'Inscrições confirmadas e as que ficaram por terminar.',
     rejeicoes: 'Processos que não seguiram.',
