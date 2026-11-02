@@ -144,6 +144,22 @@ details.mail summary { cursor: pointer; color: var(--accent); font-weight: 600; 
 .niveis button { border: 1px solid var(--line); background: var(--card); color: var(--muted); border-radius: 999px; padding: 6px 12px; font-size: 13px; font-weight: 600; cursor: pointer; }
 .niveis button[aria-pressed="true"] { background: var(--brand-soft); border-color: var(--brand); color: var(--brand); }
 .niveis .n { font-variant-numeric: tabular-nums; opacity: .8; }
+/* palavras-chave da busca */
+details.busca > summary { cursor: pointer; display: flex; flex-wrap: wrap; gap: 4px 10px; align-items: baseline; list-style: none; }
+details.busca > summary::-webkit-details-marker { display: none; }
+details.busca > summary::before { content: "▸"; color: var(--muted); }
+details.busca[open] > summary::before { content: "▾"; }
+details.busca > summary h2 { margin: 0; }
+details.busca[open] { gap: 14px; }
+.busca-lista { display: grid; gap: 6px; border-top: 1px solid var(--line); padding-top: 12px; }
+.busca-lista h3 { margin: 0; font-size: 15px; }
+.busca-lista .meta { margin: 0; }
+.pill.termo { display: inline-flex; align-items: center; gap: 2px; font-size: 13px; padding: 2px 4px 2px 10px; }
+.pill.termo button { border: 0; background: none; color: inherit; cursor: pointer; font-size: 12px; padding: 2px 6px; border-radius: 999px; }
+.busca-add { display: flex; gap: 8px; }
+.busca-add input { flex: 1; min-width: 0; min-height: 40px; padding: 0 10px; border: 1px solid var(--line); border-radius: 10px; background: var(--card); color: var(--ink); font: inherit; }
+.btn.link { border: 0; background: none; min-height: 0; padding: 4px 0; color: var(--accent); font-weight: 600; }
+.busca-lista .btn.link { justify-self: start; }
 .job h2 { font-size: 16px; }
 .job.done { opacity: .72; }
 

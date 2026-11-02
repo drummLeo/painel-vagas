@@ -32,6 +32,8 @@ const S = {
   route: '',
   studyOpen: new Set(),                    // baralhos e cartões abertos no Material de estudo (sobrevive ao redesenho)
   treinoAtual: '',                         // cartão escolhido no treino (vazio: o primeiro da fila)
+  buscaApp: null,                          // app/busca.json: as palavras-chave salvas no app ({data, sha})
+  buscaRascunho: null,                     // palavras-chave alteradas e ainda não salvas, por lista (null = voltar ao padrão)
   cartaAberta: '',                         // vaga (ou carta avulsa "manual:…") com a carta aberta
   cartaForm: {},                           // rascunho do pedido de carta, por id (sobrevive ao redesenho)
   pergAberta: '',                          // vaga com as perguntas de formulário abertas
@@ -170,7 +172,7 @@ async function loadAll() {
   renderSync();
   try {
     const cardsFresh = S.data.cards && S.data.modelos && Date.now() - (S.data.cardsAt || 0) < 30 * 60e3;
-    const [vagas, retornos, treino, status, push, appcfg, cartas, respostas, avaliacoes, ultimos, cards, modelos, pdfs, marks] = await Promise.all([
+    const [vagas, retornos, treino, status, push, appcfg, cartas, respostas, avaliacoes, ultimos, cards, modelos, pdfs, marks, busca, buscaApp] = await Promise.all([
       readJson('data/vagas.json', []), readJson('data/retornos.json', []), readJson('data/treino.json', null),
       readJson('data/status.json', null), readJson('data/push.json', null), readJson('data/app-config.json', {}),
       readJson('data/cartas.json', {}), readJson('data/respostas.json', {}), readJson('data/avaliacoes.json', {}),
@@ -178,8 +180,10 @@ async function loadAll() {
       cardsFresh ? S.data.cards : readJson('cartoes/entrevista.json', null),
       cardsFresh ? S.data.modelos : readJson('cartoes/audio/indice.json', {}),
       cardsFresh && S.data.pdfs ? S.data.pdfs : listPdfs(), getFile(MARKS_PATH),
+      readJson('data/busca.json', null), getFile(BUSCA_PATH),
     ]);
-    Object.assign(S.data, { vagas, retornos, treino, status, push, appcfg, cartas, respostas, avaliacoes, ultimos, at: Date.now() });
+    Object.assign(S.data, { vagas, retornos, treino, status, push, appcfg, cartas, respostas, avaliacoes, ultimos, busca, at: Date.now() });
+    S.buscaApp = buscaApp;
     if (!cardsFresh || !S.data.pdfs) Object.assign(S.data, { cards, modelos, pdfs, cardsAt: Date.now() });
     const remote = marks ? marks.data : {};
     S.marks = normMarks(S.dirty ? deepMerge(remote, S.marks) : remote);
@@ -791,7 +795,95 @@ function viewVagas() {
   return `<h1>Vagas</h1>${cartasAvulsas()}<div class="seg" role="group" aria-label="Filtro">${seg}</div>
     ${niveis}
     ${items ?`<div class="list">${items}</div>` : `<p class="empty">${empty}</p>`}
-    <p class="meta">As vagas ficam aqui por 30 dias depois de encontradas.</p>`;
+    <p class="meta">As vagas ficam aqui por 30 dias depois de encontradas.</p>
+    ${buscaView()}`;
+}
+
+// ---------- palavras-chave da busca: o app grava app/busca.json e o bot usa no lugar do config.toml ----------
+// O bot publica em data/busca.json o que está valendo ("em_uso") e o padrão do config.toml ("padrao").
+const BUSCA_PATH = 'app/busca.json';
+const BUSCA_LISTAS = [
+  ['termos', 'Termos de busca', 'Buscados na Gupy. O título da vaga precisa ter um destes termos ou um dos extras abaixo.'],
+  ['termos_titulo_extra', 'Termos extras no título', 'Também valem no título, mas não são buscados na Gupy.'],
+  ['excluir_no_titulo', 'Palavras que excluem a vaga', 'Se o título tiver uma destas, a vaga é ignorada.'],
+  ['palavras_estagio', 'Palavras de estágio', 'Nas fontes que misturam tipos de vaga (Remotar e páginas de empresas), o título precisa ter uma destas.'],
+];
+// lista mostrada: o rascunho (se houver), senão o que o app salvou, senão o que o bot está usando
+function buscaLista(k) {
+  const r = S.buscaRascunho || {};
+  if (k in r) return r[k] === null ? ((S.data.busca || {}).padrao || {})[k] || [] : r[k];
+  const salvo = (S.buscaApp || {}).data || {};
+  if (Array.isArray(salvo[k])) return salvo[k];
+  return ((S.data.busca || {}).em_uso || {})[k] || [];
+}
+function buscaTrocada(k) {
+  const r = S.buscaRascunho || {};
+  if (k in r) return r[k] !== null;
+  return Array.isArray(((S.buscaApp || {}).data || {})[k]);
+}
+function buscaView() {
+  const b = S.data.busca;
+  if (!b || !b.em_uso) {
+    return `<details class="panel busca" data-open="busca"${S.studyOpen.has('busca') ? ' open' : ''}><summary><h2>🔎 Palavras-chave da busca</h2></summary>
+      <p class="lede">As listas aparecem depois da próxima execução do bot.</p></details>`;
+  }
+  // salvo no app, mas o bot ainda não aplicou (a próxima execução usa)
+  const salvo = (S.buscaApp || {}).data || {};
+  const pendente = BUSCA_LISTAS.some(([k]) => {
+    const app = Array.isArray(salvo[k]) ? salvo[k] : b.padrao[k];
+    return JSON.stringify(app || []) !== JSON.stringify(b.em_uso[k] || []);
+  });
+  const listas = BUSCA_LISTAS.map(([k, titulo, ajuda]) => {
+    const itens = buscaLista(k);
+    const chips = itens.map(t => `<span class="pill brand termo">${esc(t)}<button data-act="busca-tirar" data-lista="${k}" data-termo="${esc(t)}" aria-label="Tirar ${esc(t)}">✕</button></span>`).join('');
+    return `<div class="busca-lista">
+      <h3>${titulo} <span class="meta">${itens.length}${buscaTrocada(k) ? ' · alterada' : ''}</span></h3>
+      <p class="meta">${ajuda}</p>
+      <div class="chips">${chips || '<span class="meta">Nenhuma.</span>'}</div>
+      <form class="busca-add" data-lista="${k}"><input name="termo" placeholder="Nova palavra" autocomplete="off" enterkeyhint="done"><button class="btn">Adicionar</button></form>
+      ${buscaTrocada(k) ? `<button class="btn link" data-act="busca-padrao" data-lista="${k}">Voltar ao padrão</button>` : ''}
+    </div>`;
+  }).join('');
+  const total = buscaLista('termos').length, fora = buscaLista('excluir_no_titulo').length;
+  const acoes = S.buscaRascunho
+    ? `<div class="btns two busca-acoes"><button class="btn" data-act="busca-descartar">Descartar</button><button class="btn primary" data-act="busca-salvar">Salvar</button></div>`
+    : pendente
+      ? `<p class="note">⏳ Salvo. O bot usa as palavras novas na próxima execução (até 15 min), ou agora: <button class="btn link" data-act="refresh">Atualizar agora</button></p>`
+      : '';
+  return `<details class="panel busca" data-open="busca"${S.studyOpen.has('busca') || S.buscaRascunho ? ' open' : ''}>
+    <summary><h2>🔎 Palavras-chave da busca</h2><span class="meta">${plural(total, 'termo', 'termos')} · ${plural(fora, 'exclusão', 'exclusões')}</span></summary>
+    <p class="lede">O bot busca e filtra as vagas com estas listas. Maiúsculas e acentos não fazem diferença.</p>
+    ${listas}${acoes}</details>`;
+}
+function buscaMudar(k, fn) {
+  S.buscaRascunho = { ...(S.buscaRascunho || {}), [k]: fn(buscaLista(k).slice()) };
+  render();
+}
+async function salvarBusca() {
+  const r = S.buscaRascunho;
+  if (!r) return;
+  if (r.termos && !r.termos.length) return toast('Deixe pelo menos um termo de busca.');
+  const btn = $('[data-act="busca-salvar"]');
+  if (btn) { btn.disabled = true; btn.textContent = 'Salvando…'; }
+  for (let tentativa = 0; tentativa < 3; tentativa++) {
+    try {
+      const atual = await getFile(BUSCA_PATH);  // relê: o sha muda a cada gravação
+      const dados = { ...(atual ? atual.data : {}) };
+      for (const [k, v] of Object.entries(r)) { if (v === null) delete dados[k]; else dados[k] = v; }
+      dados.atualizado_em = new Date().toISOString();
+      await putFile(BUSCA_PATH, dados, atual && atual.sha, 'painel: palavras-chave da busca');
+      S.buscaApp = { data: dados };
+      S.buscaRascunho = null;
+      toast('Salvo. A próxima execução do bot já usa as palavras novas.', 4000);
+      render();
+      return;
+    } catch (e) {
+      if (e.status === 409 || e.status === 422) continue;
+      toast(errText(e), 5000);
+      break;
+    }
+  }
+  render();
 }
 
 function pdfButton(id) {
@@ -1673,6 +1765,16 @@ document.addEventListener('click', e => {
   } else if (act === 'ir-estudo') {
     const est = $('#estudo');
     if (est) est.scrollIntoView({ block: 'start' });
+  } else if (act === 'busca-tirar') {
+    buscaMudar(el.dataset.lista, l => l.filter(t => t !== el.dataset.termo));
+  } else if (act === 'busca-padrao') {
+    S.buscaRascunho = { ...(S.buscaRascunho || {}), [el.dataset.lista]: null };
+    render();
+  } else if (act === 'busca-descartar') {
+    S.buscaRascunho = null;
+    render();
+  } else if (act === 'busca-salvar') {
+    salvarBusca();
   } else if (act === 'pdf') {
     openPdf(el);
   } else if (act === 'livro-ir') {
@@ -1707,6 +1809,19 @@ document.addEventListener('click', e => {
 });
 
 document.addEventListener('submit', e => {
+  const add = e.target.closest('form.busca-add');
+  if (add) {
+    // nova palavra-chave: entra no rascunho, sem repetir (maiúsculas e acentos não contam)
+    e.preventDefault();
+    const termo = add.termo.value.trim().replace(/\s+/g, ' ');
+    if (!termo) return;
+    const k = add.dataset.lista;
+    if (buscaLista(k).some(t => semAcento(t) === semAcento(termo))) return toast(`"${termo}" já está na lista.`);
+    buscaMudar(k, l => l.concat(termo));
+    const campo = $(`form.busca-add[data-lista="${k}"] input`);
+    if (campo) campo.focus();
+    return;
+  }
   if (e.target.id !== 'cfg-form') return;
   e.preventDefault();
   saveSettings(e.target);
