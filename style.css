@@ -144,6 +144,13 @@ details.mail summary { cursor: pointer; color: var(--accent); font-weight: 600; 
 .niveis button { border: 1px solid var(--line); background: var(--card); color: var(--muted); border-radius: 999px; padding: 6px 12px; font-size: 13px; font-weight: 600; cursor: pointer; }
 .niveis button[aria-pressed="true"] { background: var(--brand-soft); border-color: var(--brand); color: var(--brand); }
 .niveis .n { font-variant-numeric: tabular-nums; opacity: .8; }
+/* ações pendentes (topo do Início e Retornos → Ações) */
+.acoes-topo { gap: 8px; }
+.acao-linha { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 8px 0; border-top: 1px solid var(--line); }
+.acao-linha > div { min-width: 0; }
+.acao-linha b { overflow-wrap: anywhere; }
+.acao-linha .btn { flex: none; min-height: 36px; padding: 0 12px; }
+details.feitas > summary { cursor: pointer; color: var(--muted); font-weight: 600; padding: 6px 0; }
 /* palavras-chave da busca */
 details.busca > summary { cursor: pointer; display: flex; flex-wrap: wrap; gap: 4px 10px; align-items: baseline; list-style: none; }
 details.busca > summary::-webkit-details-marker { display: none; }

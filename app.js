@@ -78,7 +78,7 @@ function domain(email) { return (email || '').split('@')[1] || ''; }
 function normMarks(m) {
   m = m && typeof m === 'object' ? m : {};
   return { vagas: m.vagas || {}, retornos_lidos: m.retornos_lidos || {}, treino: m.treino || {}, cartas: m.cartas || {},
-    perguntas: m.perguntas || {}, banco: m.banco || {} };
+    perguntas: m.perguntas || {}, banco: m.banco || {}, acoes_feitas: m.acoes_feitas || {} };
 }
 function deepMerge(a, b) {
   if (!a || typeof a !== 'object' || Array.isArray(a)) return b;
@@ -218,6 +218,9 @@ function pruneMarks(m) {
   for (const [id, p] of Object.entries(m.cartas)) if (!p || (p.pedido_em || '') < cartasCutoff) delete m.cartas[id];
   for (const [id, q] of Object.entries(m.perguntas)) if (!q || (q.pedido_em || '') < cartasCutoff) delete m.perguntas[id];
   for (const [id, b] of Object.entries(m.banco)) if (!b) delete m.banco[id];  // o banco não expira
+  // "Feito" das ações: null é o "desfazer" (precisa vencer o valor antigo no merge e depois sumir)
+  const processos = new Set((S.data.retornos || []).map(r => r.candidatura || r.id));
+  for (const [k, v] of Object.entries(m.acoes_feitas)) if (!v || (processos.size && !processos.has(k))) delete m.acoes_feitas[k];
   return m;
 }
 async function saveMarks() {
@@ -363,6 +366,54 @@ function retornoCard(r) {
   </article>`;
 }
 
+// ---------- ações pendentes: processos que esperam algo de você ----------
+const ACAO_TIPOS = new Set(['teste', 'entrevista', 'pendente', 'aprovado', 'avancou']);
+const ACAO_TEXTO = { teste: 'Fazer o teste', entrevista: 'Marcar ou confirmar a entrevista', pendente: 'Terminar a inscrição',
+  aprovado: 'Ver o próximo passo', avancou: 'Ver o próximo passo' };
+// Um item por processo (a chave "candidatura" junta os e-mails): o pedido mais recente. Sai da lista quando você
+// marca "Feito" (até chegar um pedido mais novo do mesmo processo) ou quando chega uma rejeição depois do pedido.
+// Uma confirmação de inscrição depois do pedido não conta: o teste da TIVIT veio antes do "obrigada pelo interesse".
+function acoesPendentes(feitas = false) {
+  const out = [];
+  for (const items of candidaturasPorEmail()) {  // cada processo vem do e-mail mais novo para o mais velho
+    const pedido = items.find(r => ACAO_TIPOS.has(r.tipo));
+    if (!pedido) continue;
+    const t = Date.parse(quando(pedido)) || 0;
+    if (items.some(r => r.tipo === 'reprovado' && (Date.parse(quando(r)) || 0) > t)) continue;
+    const chave = pedido.candidatura || pedido.id;
+    const marca = S.marks.acoes_feitas[chave];
+    const feito = Boolean(marca) && (Date.parse(marca) || 0) >= t;
+    if (feito === feitas) out.push({ chave, pedido, items });
+  }
+  return out;
+}
+function quemDoProcesso(r) {
+  return [r.empresa, r.cargo].filter(Boolean).join(' · ') || r.nome || (r.email ? domain(r.email) : '') || 'Processo';
+}
+function acaoCard({ chave, pedido, items }) {
+  const tipo = tipoDe(pedido);
+  const novo = items.some(isUnread);
+  return `<article class="panel ${novo ? 'hl-warn' : ''}">
+    <div class="row"><span class="pill ${tipo.cls}">${tipo.label}</span>
+      <span class="meta">${novo ? '<span class="newdot"></span>' : ''}${esc(rel(quando(pedido)))}</span></div>
+    <h2>${esc(ACAO_TEXTO[pedido.tipo] || 'Responder')}: ${esc(quemDoProcesso(pedido))}</h2>
+    <div class="meta">${esc(pedido.assunto || '(sem assunto)')}</div>
+    ${pedido.trecho ? `<p class="quote">“${esc(pedido.trecho)}”</p>` : ''}
+    ${mailDetails(pedido)}
+    <div class="btns">${gmailButton(pedido, 'btn primary')}
+      <button class="btn ok" data-act="acao-feita" data-chave="${esc(chave)}" data-quando="${esc(quando(pedido) || '')}">✓ Feito</button></div>
+  </article>`;
+}
+// versão curta, para o topo do Início
+function acaoLinha({ chave, pedido, items }) {
+  const tipo = tipoDe(pedido);
+  return `<div class="acao-linha">
+    <div><span class="pill ${tipo.cls}">${tipo.label}</span> <b>${esc(quemDoProcesso(pedido))}</b>
+      <div class="meta">${items.some(isUnread) ? '<span class="newdot"></span>' : ''}${esc(ACAO_TEXTO[pedido.tipo] || 'Responder')} · ${esc(rel(quando(pedido)))}</div></div>
+    <button class="btn ok" data-act="acao-feita" data-chave="${esc(chave)}" data-quando="${esc(quando(pedido) || '')}">✓ Feito</button>
+  </div>`;
+}
+
 function viewWelcome() {
   return `<h1>Bem-vindo ao Painel</h1>
   <p class="lede">Para começar, conecte o repositório do bot em Ajustes.</p>
@@ -371,7 +422,16 @@ function viewWelcome() {
 
 function viewInicio() {
   const parts = [];
-  const unread = unreadRetornos();
+  // no topo: o que espera uma ação sua (teste, entrevista, inscrição por terminar)
+  const acoes = acoesPendentes();
+  if (acoes.length) {
+    parts.push(`<section class="panel hl-warn acoes-topo"><div class="row"><h2>⚡ Precisa da sua ação</h2><span class="pill warn">${acoes.length}</span></div>
+      ${acoes.slice(0, 3).map(acaoLinha).join('')}
+      <button class="btn" data-act="ver-acoes">${acoes.length > 3 ? `Ver todas (${acoes.length})` : 'Ver detalhes'}</button></section>`);
+  }
+  // os e-mails dessas ações já estão no quadro acima: não repete na lista de retornos novos
+  const emAcao = new Set(acoes.flatMap(a => a.items.filter(r => ACAO_TIPOS.has(r.tipo)).map(r => r.id)));
+  const unread = unreadRetornos().filter(r => !emAcao.has(r.id));
   if (myPush() && myPush().expirado) {
     parts.push(`<div class="panel alert"><h2>As notificações pararam</h2><p class="lede">O Android cancelou a inscrição. Reative em Ajustes.</p><a class="btn" href="#ajustes">Reativar</a></div>`);
   } else if (S.pushState === 'off' || S.pushState === 'denied') {
@@ -445,31 +505,42 @@ function autoRead(items) {
 
 function viewRetornos() {
   const all = (S.data.retornos || []).slice().sort((a, b) => (quando(b) || '').localeCompare(quando(a) || ''));
+  const acoes = acoesPendentes();
   const groups = {
+    acoes: acoes.map(a => a.pedido),  // só para contar e marcar novidade; a lista própria vem de "acoes"
     avancos: all.filter(r => tipoDe(r).avanco),
     inscricoes: all.filter(r => r.tipo === 'inscricao' || r.tipo === 'pendente'),
     rejeicoes: all.filter(r => r.tipo === 'reprovado'),
   };
   const f = groups[S.retornosFiltro] ? S.retornosFiltro : 'avancos';
-  const seg = [['avancos', 'Avanços'], ['inscricoes', 'Inscrições'], ['rejeicoes', 'Rejeições']].map(([k, label]) => {
-    const novos = groups[k].filter(isUnread).length;
+  const seg = [['acoes', 'Ações'], ['avancos', 'Avanços'], ['inscricoes', 'Inscrições'], ['rejeicoes', 'Rejeições']].map(([k, label]) => {
+    const novos = k === 'acoes' ? acoes.filter(a => a.items.some(isUnread)).length : groups[k].filter(isUnread).length;
     return `<button data-act="rfiltro" data-f="${k}" aria-pressed="${f === k}">${novos ? '<span class="newdot"></span>' : ''}${label} <span class="n">${groups[k].length}</span></button>`;
   }).join('');
   const lede = {
+    acoes: 'Processos que esperam algo de você: um teste, marcar uma entrevista, terminar uma inscrição. Marque “Feito” quando resolver.',
     avancos: 'Aprovações, convites para entrevista e testes.',
     inscricoes: 'Inscrições confirmadas e as que ficaram por terminar.',
     rejeicoes: 'Processos que não seguiram.',
   }[f];
   const empty = {
+    acoes: 'Nada esperando por você. Quando um e-mail pedir um teste, uma entrevista ou para terminar uma inscrição, ele aparece aqui.',
     avancos: 'Nenhum avanço ainda. Quando um e-mail indicar aprovação, entrevista ou teste, ele aparece aqui e o celular avisa.',
     inscricoes: 'Nenhuma inscrição registrada nos últimos 90 dias.',
     rejeicoes: 'Nenhuma rejeição registrada.',
   }[f];
-  const items = groups[f].map(r => (r.tipo === 'inscricao' ? inscricaoRow(r) : retornoCard(r))).join('');
-  autoRead(groups[f]);
+  const items = f === 'acoes' ? acoes.map(acaoCard).join('')
+    : groups[f].map(r => (r.tipo === 'inscricao' ? inscricaoRow(r) : retornoCard(r))).join('');
+  if (f !== 'acoes') autoRead(groups[f]);
+  // nas ações, as resolvidas ficam guardadas, com "Desfazer" para o caso de ter marcado sem querer
+  const feitas = f === 'acoes' ? acoesPendentes(true) : [];
+  const resolvidas = feitas.length ? `<details class="feitas"><summary>Resolvidas · ${feitas.length}</summary><div class="list">${feitas.map(({ chave, pedido }) =>
+    `<div class="acao-linha"><div><span class="pill ${tipoDe(pedido).cls}">${tipoDe(pedido).label}</span> <b>${esc(quemDoProcesso(pedido))}</b>
+      <div class="meta">${esc(pedido.assunto || '')}</div></div>
+      <button class="btn" data-act="acao-desfazer" data-chave="${esc(chave)}">Desfazer</button></div>`).join('')}</div></details>` : '';
   return `<h1>Retornos</h1><div class="seg" role="group" aria-label="Tipo">${seg}</div>
   <p class="lede">${lede}</p>
-  ${items ? `<div class="list">${items}</div>` : `<p class="empty">${empty}</p>`}`;
+  ${items ? `<div class="list">${items}</div>` : `<p class="empty">${empty}</p>`}${resolvidas}`;
 }
 
 // Candidaturas feitas fora do bot (LinkedIn, Gupy, sites das empresas...), montadas pelos e-mails:
@@ -1354,7 +1425,9 @@ function renderSync() {
 }
 function renderBadges() {
   const set = (id, n, soft) => { const el = $(id); el.hidden = !n; el.textContent = n > 99 ? '99+' : n; el.classList.toggle('soft', !!soft); };
-  const r = unreadRetornos().length, v = newVagas().length;
+  // retornos não lidos + ações pendentes cujos e-mails já foram lidos (elas continuam pedindo atenção até o "Feito")
+  const acoesLidas = acoesPendentes().filter(a => !a.items.some(isUnread)).length;
+  const r = unreadRetornos().length + acoesLidas, v = newVagas().length;
   const info = treinoInfo();
   const t = info && info.isToday && !info.met ? info.left : 0;
   set('#n-retornos', r);
@@ -1775,6 +1848,21 @@ document.addEventListener('click', e => {
     render();
   } else if (act === 'busca-salvar') {
     salvarBusca();
+  } else if (act === 'acao-feita') {
+    // guarda a data do pedido resolvido: um pedido mais novo do mesmo processo volta a aparecer
+    const { chave, quando: q } = el.dataset;
+    const ids = (S.data.retornos || []).filter(r => (r.candidatura || r.id) === chave).map(r => r.id);
+    setMarks(m => {
+      m.acoes_feitas[chave] = q || new Date().toISOString();
+      for (const id of ids) if (!m.retornos_lidos[id]) m.retornos_lidos[id] = todayBRT();
+    });
+    toast('Feito. Se chegar um pedido novo desse processo, ele volta para a lista.', 4000);
+  } else if (act === 'acao-desfazer') {
+    setMarks(m => { m.acoes_feitas[el.dataset.chave] = null; });
+  } else if (act === 'ver-acoes') {
+    S.retornosFiltro = 'acoes';
+    store.set('retornosFiltro', 'acoes');
+    location.hash = '#retornos';
   } else if (act === 'pdf') {
     openPdf(el);
   } else if (act === 'livro-ir') {
