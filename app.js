@@ -31,6 +31,7 @@ const S = {
   pushId: '',                              // hash da inscrição de push deste aparelho
   route: '',
   studyOpen: new Set(),                    // baralhos e cartões abertos no Material de estudo (sobrevive ao redesenho)
+  treinoAtual: '',                         // cartão escolhido no treino (vazio: o primeiro da fila)
   cartaAberta: '',                         // vaga (ou carta avulsa "manual:…") com a carta aberta
   cartaForm: {},                           // rascunho do pedido de carta, por id (sobrevive ao redesenho)
   pergAberta: '',                          // vaga com as perguntas de formulário abertas
@@ -287,18 +288,35 @@ function treinoInfo() {
   if (!t || !deck || !Array.isArray(t.cartoes)) return null;
   const byId = Object.fromEntries(deck.cartoes.map(c => [c.id, c]));
   const answers = { ...(S.marks.treino[t.dia] || {}), ...(t.respondidos || {}) };  // o que o bot já leu prevalece
-  const ids = t.cartoes.filter(id => byId[id]);
-  const done = ids.filter(id => id in answers).length;
+  const ids = t.cartoes.filter(id => byId[id]);  // as sugestões do dia
+  // qualquer cartão respondido conta para a meta, como no bot (o mark() soma todas as respostas do dia)
+  const done = Object.keys(answers).filter(id => byId[id]).length;
   const meta = t.meta || ids.length;
   const isToday = t.dia === todayBRT();
   const serverMet = (t.feitos_hoje || 0) >= meta;
   const met = serverMet || done >= meta;
   return {
     t, byId, ids, answers, done, meta, isToday, met, labels: deck.baralhos || {},
-    next: ids.find(id => !(id in answers)),
     left: Math.max(0, meta - Math.max(done, t.feitos_hoje || 0)),
     sequencia: (t.sequencia || 0) + (met && !serverMet && isToday ? 1 : 0),
   };
+}
+
+// Fila do treino: as sugestões do dia primeiro, depois todos os outros cartões, na ordem dos baralhos.
+// Os pulados vão para o fim (na ordem em que foram pulados) e ficam à mão na lista "Pulados".
+function treinoPulados(info) {
+  const p = store.get('treinoPulados', null);
+  return p && p.dia === info.t.dia ? p.ids.filter(id => info.byId[id] && !(id in info.answers)) : [];
+}
+function filaTreino(info) {
+  const livre = id => !(id in info.answers);
+  const pulados = treinoPulados(info);
+  const resto = [...info.ids, ...Object.keys(info.byId).filter(id => !info.ids.includes(id))];
+  return resto.filter(id => livre(id) && !pulados.includes(id)).concat(pulados);
+}
+function cartaoAtual(info) {
+  const fila = filaTreino(info);
+  return fila.includes(S.treinoAtual) ? S.treinoAtual : fila[0];
 }
 
 // ---------- telas ----------
@@ -995,9 +1013,17 @@ function studyLibrary() {
   for (const c of deck.cartoes) (groups[c.deck] ||= []).push(c);
   const decks = Object.keys(labels).filter(k => groups[k]).concat(Object.keys(groups).filter(k => !(k in labels)));
   const nPdf = deck.cartoes.filter(c => (S.data.pdfs || {})[c.id]).length;
+  // qualquer cartão pode ser respondido no treino; os já respondidos hoje mostram o resultado
+  const info = treinoInfo();
+  const acao = c => {
+    if (!info) return '';
+    const a = info.answers[c.id];
+    if (a !== undefined) return ` <span class="pill ${a ? 'ok' : 'warn'}">${a ? '✓' : '↻'} hoje</span>`;
+    return ` <button class="pill brand" data-act="treino-ir" data-id="${esc(c.id)}">🎯 Responder</button>`;
+  };
   const body = decks.map(k => {
     const items = groups[k].map(c => `<details class="study" data-open="${esc(c.id)}"${S.studyOpen.has(c.id) ? ' open' : ''}>
-        <summary>${richText(c.q)}</summary>
+        <summary>${richText(c.q)}${acao(c)}</summary>
         <ul class="answer">${(c.a || []).map(x => `<li>${richText(x)}</li>`).join('')}</ul>
         ${modeloNote(c)}
         ${c.extra ? `<div class="note"><strong>Se aprofundarem</strong>${richText(c.extra)}</div>` : ''}
@@ -1012,8 +1038,8 @@ function studyLibrary() {
   const livro = (S.data.pdfs || {}).livro ? `<div class="livro-entrada"><div><strong>📘 Livro de estudo</strong>
       <p class="meta">A teoria por trás de todos os cartões, para ler antes de praticar.</p></div>
       <a class="btn primary" href="#livro">Ler</a></div>` : '';
-  return `<section class="panel"><div class="row"><h2>Material de estudo</h2><span class="meta">${nPdf ? `${plural(nPdf, 'PDF', 'PDFs')}` : ''}</span></div>
-    <p class="lede">Todos os cartões: toque na pergunta para ver a resposta resumida e, quando houver, abra o PDF com a explicação completa.</p>
+  return `<section class="panel" id="estudo"><div class="row"><h2>Material de estudo</h2><span class="meta">${nPdf ? `${plural(nPdf, 'PDF', 'PDFs')}` : ''}</span></div>
+    <p class="lede">Todos os cartões: toque na pergunta para ver a resposta resumida e, quando houver, abra o PDF com a explicação completa. Em 🎯 Responder, o cartão vai para o treino.</p>
     ${livro}${body}</section>`;
 }
 
@@ -1087,9 +1113,20 @@ function viewTreino() {
   if (!info.isToday) {
     parts.push(`<div class="panel alert"><p class="lede">Estes são os cartões de ${esc(info.t.dia.split('-').reverse().slice(0, 2).join('/'))}. Os de hoje chegam na próxima execução do bot.</p><button class="btn" data-act="refresh">Atualizar agora</button></div>`);
   }
-  if (info.next) {
-    const c = info.byId[info.next];
-    const pos = info.ids.indexOf(info.next) + 1;
+  const fila = filaTreino(info);
+  const pulados = treinoPulados(info);
+  const atual = cartaoAtual(info);
+  if (info.met) {
+    parts.push(`<div class="panel hl"><h2>🎉 Meta de hoje cumprida</h2><p class="lede">${info.sequencia ? `Sequência de ${plural(info.sequencia, 'dia', 'dias')}. ` : ''}${fila.length
+      ? 'Se quiser, continue com outros cartões: toda resposta conta para a revisão espaçada.'
+      : 'Você respondeu todos os cartões hoje.'}</p></div>`);
+  }
+  if (atual) {
+    const c = info.byId[atual];
+    const sug = info.ids.indexOf(c.id);
+    const origem = sug >= 0 ? `sugestão ${sug + 1} de ${info.ids.length}` : pulados.includes(c.id) ? 'pulado' : 'extra';
+    // pular só faz sentido se houver outro cartão na fila para mostrar
+    const pular = fila.length > 1 ? `<button class="btn" data-act="pular" data-id="${esc(c.id)}">⏭ Pular</button>` : '';
     const answer = S.reveal ? `<ul class="answer anim">${c.a.map(x => `<li>${richText(x)}</li>`).join('')}</ul>` : '';
     const notes = S.reveal ? [
       modeloNote(c),
@@ -1100,22 +1137,26 @@ function viewTreino() {
     // a avaliação falada só conta se for de hoje (de outro dia seria outra tentativa)
     const voz = vozBlock(c.id, new Date(Date.now() - 18 * 3600e3).toISOString());
     const foot = S.reveal
-      ? `${voz}${notes}<div class="btns two"><button class="btn warn" data-act="answer" data-id="${esc(c.id)}" data-knew="0">🔁 Preciso revisar</button><button class="btn ok" data-act="answer" data-id="${esc(c.id)}" data-knew="1">✅ Já sei</button></div>`
-      : `<p class="meta" style="margin:0">Responda em voz alta e só depois veja a resposta. Gravando, o PC confere a sua resposta com o cartão.</p>${voz}<button class="btn primary" data-act="reveal">Mostrar resposta</button>`;
+      ? `${voz}${notes}<div class="btns two"><button class="btn warn" data-act="answer" data-id="${esc(c.id)}" data-knew="0">🔁 Preciso revisar</button><button class="btn ok" data-act="answer" data-id="${esc(c.id)}" data-knew="1">✅ Já sei</button></div>${pular.replace('⏭ Pular', '⏭ Pular e responder depois')}`
+      : `<p class="meta" style="margin:0">Responda em voz alta e só depois veja a resposta. Gravando, o PC confere a sua resposta com o cartão.</p>${voz}<div class="btns${pular ? ' two' : ''}">${pular}<button class="btn primary" data-act="reveal">Mostrar resposta</button></div>`;
     parts.push(`<article class="flash">
-      <div class="flash-head"><span><span class="tag">${esc(info.labels[c.deck] || c.deck)}</span> · ${pos}/${info.ids.length}</span><span>alvo ${esc(c.tempo || '1 min')}</span></div>
+      <div class="flash-head"><span><span class="tag">${esc(info.labels[c.deck] || c.deck)}</span> · ${origem}</span><span>alvo ${esc(c.tempo || '1 min')}</span></div>
       <div class="flash-body"><p class="q">${richText(c.q)}</p>${answer}</div>
       <div class="flash-foot">${foot}</div></article>`);
-  } else {
-    parts.push(`<div class="panel hl"><h2>🎉 Treino de hoje completo</h2><p class="lede">${info.sequencia ? `Sequência de ${plural(info.sequencia, 'dia', 'dias')}.` : ''} Os próximos cartões chegam amanhã; os que você marcou para revisar voltam antes.</p></div>`);
   }
-  const chips = info.ids.map(id => {
+  // atalhos: as sugestões do dia e os pulados abrem o cartão; respondidos só mostram o resultado
+  const titulo = id => esc(info.byId[id].q.replace(/<[^>]+>/g, ''));
+  const chip = (id, rotulo) => {
     const a = info.answers[id];
-    const cls = a === true ? 'ok' : a === false ? 'warn' : 'brand';
-    const mark = a === true ? '✓' : a === false ? '↻' : '·';
-    return `<span class="pill ${cls}" title="${esc(info.byId[id].q.replace(/<[^>]+>/g, ''))}">${mark} ${esc(info.labels[info.byId[id].deck] || '')}</span>`;
-  }).join('');
-  parts.push(`<div class="chips" aria-label="Cartões de hoje">${chips}</div>`);
+    if (a !== undefined) return `<span class="pill ${a ? 'ok' : 'warn'}" title="${titulo(id)}">${a ? '✓' : '↻'} ${rotulo}</span>`;
+    return `<button class="pill brand" data-act="treino-ir" data-id="${esc(id)}" title="${titulo(id)}"${id === atual ? ' aria-current="true"' : ''}>· ${rotulo}</button>`;
+  };
+  const curto = id => { const q = info.byId[id].q.replace(/<[^>]+>/g, ''); return esc(q.length > 34 ? q.slice(0, 33) + '…' : q); };
+  parts.push(`<section class="panel treino-nav">
+    <div><p class="meta">Sugestões de hoje</p><div class="chips">${info.ids.map(id => chip(id, esc(info.labels[info.byId[id].deck] || ''))).join('')}</div></div>
+    ${pulados.length ? `<div><p class="meta">Pulados · toque para responder</p><div class="chips">${pulados.map(id => chip(id, curto(id))).join('')}</div></div>` : ''}
+    <div class="row"><span class="meta">${plural(fila.length, 'cartão', 'cartões')} sem resposta hoje</span><button class="btn" data-act="ir-estudo">Escolher qualquer cartão ↓</button></div>
+  </section>`);
   parts.push(studyLibrary());
   return parts.join('');
 }
@@ -1606,10 +1647,32 @@ document.addEventListener('click', e => {
     if (!info) return;
     setMarks(m => { (m.treino[info.t.dia] ||= {})[el.dataset.id] = el.dataset.knew === '1'; });
     S.reveal = false;
+    S.treinoAtual = '';  // o próximo é o primeiro da fila
     const after = treinoInfo();
     if (after && after.done >= after.meta && !info.met) toast('Meta de hoje cumprida! 🔥');
     render();
     window.scrollTo(0, 0);
+  } else if (act === 'pular' || act === 'treino-ir') {
+    e.preventDefault();  // o 🎯 do Material de estudo fica dentro do <summary>: não abrir o cartão ali
+    if (vozRec.rec) return toast('Pare a gravação antes de trocar de cartão.');
+    const info = treinoInfo();
+    if (!info) return;
+    if (act === 'pular') {
+      // o pulado vai para o fim da fila e fica na lista "Pulados" até ser respondido (vale só para o dia)
+      const ids = treinoPulados(info).filter(id => id !== el.dataset.id).concat(el.dataset.id);
+      store.set('treinoPulados', { dia: info.t.dia, ids });
+      S.treinoAtual = '';
+      toast('Pulado: ele volta no fim da fila.');
+    } else {
+      S.treinoAtual = el.dataset.id;
+    }
+    S.reveal = false;
+    render();
+    const flash = $('#view .flash');
+    if (flash) flash.scrollIntoView({ block: 'start' });
+  } else if (act === 'ir-estudo') {
+    const est = $('#estudo');
+    if (est) est.scrollIntoView({ block: 'start' });
   } else if (act === 'pdf') {
     openPdf(el);
   } else if (act === 'livro-ir') {

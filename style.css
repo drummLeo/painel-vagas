@@ -185,6 +185,13 @@ code { font-family: var(--f-mono); font-size: .86em; background: var(--note); pa
 .note.check { background: var(--warn-soft); }
 .note.check strong { color: var(--warn); }
 .chips { display: flex; flex-wrap: wrap; gap: 6px; }
+button.pill { border: 0; font-family: inherit; cursor: pointer; line-height: 1.5; }
+button.pill[aria-current="true"] { outline: 2px solid var(--brand); outline-offset: 1px; }
+details.study > summary button.pill { margin-left: 4px; vertical-align: 1px; }
+.treino-nav { gap: 12px; }
+.treino-nav .meta { margin: 0 0 6px; }
+.treino-nav .row .meta { margin: 0; }
+#view .flash, #estudo { scroll-margin-top: calc(64px + env(safe-area-inset-top, 0px)); }  /* não parar atrás do cabeçalho fixo */
 details.deck { border-top: 1px solid var(--line); }
 details.deck > summary { cursor: pointer; padding: 12px 0; font-weight: 700; font-size: 16px; display: flex; gap: 8px; align-items: baseline; list-style: none; }
 details.deck > summary::-webkit-details-marker { display: none; }
