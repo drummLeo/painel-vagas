@@ -1302,7 +1302,7 @@ function viewTreino() {
     // a avaliação falada só conta se for de hoje (de outro dia seria outra tentativa)
     const voz = vozBlock(c.id, new Date(Date.now() - 18 * 3600e3).toISOString());
     const foot = S.reveal
-      ? `${voz}${notes}<div class="btns two"><button class="btn warn" data-act="answer" data-id="${esc(c.id)}" data-knew="0">🔁 Preciso revisar</button><button class="btn ok" data-act="answer" data-id="${esc(c.id)}" data-knew="1">✅ Já sei</button></div>${pular.replace('⏭ Pular', '⏭ Pular e responder depois')}`
+      ? `<button class="btn" data-act="ocultar">Ocultar resposta</button>${voz}${notes}<div class="btns two"><button class="btn warn" data-act="answer" data-id="${esc(c.id)}" data-knew="0">🔁 Preciso revisar</button><button class="btn ok" data-act="answer" data-id="${esc(c.id)}" data-knew="1">✅ Já sei</button></div>${pular.replace('⏭ Pular', '⏭ Pular e responder depois')}`
       : `<p class="meta" style="margin:0">Responda em voz alta e só depois veja a resposta. Gravando, o PC confere a sua resposta com o cartão.</p>${voz}<div class="btns${pular ? ' two' : ''}">${pular}<button class="btn primary" data-act="reveal">Mostrar resposta</button></div>`;
     parts.push(`<article class="flash">
       <div class="flash-head"><span><span class="tag">${esc(info.labels[c.deck] || c.deck)}</span> · ${origem}</span><span>alvo ${esc(c.tempo || '1 min')}</span></div>
@@ -1810,6 +1810,12 @@ document.addEventListener('click', e => {
   } else if (act === 'reveal') {
     S.reveal = true;
     render();
+  } else if (act === 'ocultar') {
+    // esconde de novo a resposta (para tentar outra vez sem olhar), mantendo o cartão na tela
+    S.reveal = false;
+    render();
+    const flash = $('#view .flash');
+    if (flash) flash.scrollIntoView({ block: 'start' });
   } else if (act === 'answer') {
     const info = treinoInfo();
     if (!info) return;
