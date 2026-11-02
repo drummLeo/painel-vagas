@@ -198,6 +198,14 @@ details.study[open] { padding-bottom: 12px; display: grid; gap: 10px; }
 details.study .answer { margin: 0; }
 details.study .answer li { line-height: 1.5; margin-bottom: 4px; }
 details.study .note { background: var(--card); }
+.livro-entrada { display: flex; align-items: center; justify-content: space-between; gap: 12px; background: var(--note); border-radius: 8px; padding: 10px 12px; }
+.livro-entrada p { margin: 2px 0 0; }
+/* o livro traz o próprio estilo (página branca, sob .livro); aqui só o encaixe na coluna do app */
+.livro-barra { display: flex; flex-wrap: wrap; gap: 8px; }
+.livro-flutuante { position: fixed; z-index: 6; right: max(16px, env(safe-area-inset-right, 0px)); bottom: calc(78px + env(safe-area-inset-bottom, 0px)); box-shadow: var(--shadow); }
+/* min-width: 0: sem isso o item da grade cresce até a linha de código mais larga e a página rola para o lado */
+#view article.livro { border-radius: 12px; padding: 18px 14px; box-shadow: var(--shadow); max-width: none; width: 100%; min-width: 0; box-sizing: border-box; }
+#view article.livro [id] { scroll-margin-top: calc(64px + env(safe-area-inset-top, 0px)); }  /* não parar atrás do cabeçalho fixo */
 
 /* ajustes */
 label { display: grid; gap: 6px; font-weight: 600; font-size: 14px; }

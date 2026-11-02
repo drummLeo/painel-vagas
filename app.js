@@ -1008,9 +1008,76 @@ function studyLibrary() {
       <summary>${esc(labels[k] || k)} <span class="meta">${plural(groups[k].length, 'cartão', 'cartões')}</span></summary>
       <div class="study-list">${items}</div></details>`;
   }).join('');
+  // o livro e o PDF dele são publicados juntos: o PDF na lista avisa que o livro existe
+  const livro = (S.data.pdfs || {}).livro ? `<div class="livro-entrada"><div><strong>📘 Livro de estudo</strong>
+      <p class="meta">A teoria por trás de todos os cartões, para ler antes de praticar.</p></div>
+      <a class="btn primary" href="#livro">Ler</a></div>` : '';
   return `<section class="panel"><div class="row"><h2>Material de estudo</h2><span class="meta">${nPdf ? `${plural(nPdf, 'PDF', 'PDFs')}` : ''}</span></div>
     <p class="lede">Todos os cartões: toque na pergunta para ver a resposta resumida e, quando houver, abra o PDF com a explicação completa.</p>
-    ${body}</section>`;
+    ${livro}${body}</section>`;
+}
+
+// ---------- livro de estudo: livro/livro.html no repositório do bot, lido dentro do app ----------
+// Fica guardado no Cache Storage (abre sem rede); a cada sessão o app confere o sha e baixa de novo se mudou.
+const LIVRO_DIR = 'livro';
+const LIVRO_CACHE = 'painel-livro';
+async function livroDoCache() {
+  try {
+    const r = await (await caches.open(LIVRO_CACHE)).match('./livro.html');
+    return r ? { html: await r.text(), sha: r.headers.get('x-sha') || '' } : null;
+  } catch { return null; }
+}
+async function livroParaCache(html, sha) {
+  try {
+    await (await caches.open(LIVRO_CACHE)).put('./livro.html', new Response(html, { headers: { 'content-type': 'text/html', 'x-sha': sha } }));
+  } catch { /* sem Cache Storage: lê da rede da próxima vez */ }
+}
+function livroPartes(html, sha) {
+  const doc = new DOMParser().parseFromString(html, 'text/html');
+  return { css: [...doc.querySelectorAll('style')].map(s => s.textContent).join('\n'), body: doc.body.innerHTML, sha };
+}
+async function carregarLivro() {
+  if (S.livroCarregando) return;
+  S.livroCarregando = true;
+  try {
+    if (!S.livro) {
+      const c = await livroDoCache();
+      if (c) { S.livro = livroPartes(c.html, c.sha); if (S.route === 'livro') render(); }
+    }
+    const f = (await gh(`contents/${LIVRO_DIR}`)).find(x => x.name === 'livro.html');
+    if (!f) throw Object.assign(new Error('livro'), { status: 404 });
+    if (!S.livro || S.livro.sha !== f.sha) {
+      const html = await gh(`contents/${LIVRO_DIR}/livro.html`, { raw: true });
+      S.livro = livroPartes(html, f.sha);
+      livroParaCache(html, f.sha);
+      if (S.route === 'livro') render();
+    }
+  } catch (e) {
+    if (!S.livro) {
+      S.livroErro = e.status === 404 ? 'O livro ainda não foi publicado.' : errText(e);
+      if (S.route === 'livro') render();
+    }
+  } finally {
+    S.livroCarregando = false;
+  }
+}
+function viewLivro() {
+  if (!S.livroConferido) { S.livroConferido = true; carregarLivro(); }  // uma conferência de versão por sessão
+  if (!S.livro) {
+    return `<h1>Livro de estudo</h1><p class="empty">${S.livroErro ? esc(S.livroErro) : 'Carregando o livro…'}</p>
+      <a class="btn" href="#treino">← Treino</a>`;
+  }
+  let st = document.getElementById('livro-css');
+  if (!st) { st = document.createElement('style'); st.id = 'livro-css'; document.head.append(st); }
+  if (st.textContent !== S.livro.css) st.textContent = S.livro.css;
+  return `<div class="livro-barra"><a class="btn" href="#treino">← Treino</a>
+      ${pdfButton('livro').replace('📄 Explicação completa (PDF)', '📄 Baixar o PDF')}</div>
+    <article class="livro">${S.livro.body}</article>
+    <button class="btn livro-flutuante" data-act="livro-ir" data-alvo="sumario">☰ Sumário</button>`;
+}
+function irNoLivro(alvo) {
+  const el = alvo && document.querySelector(`#view article.livro [id="${CSS.escape(alvo)}"]`);
+  if (el) el.scrollIntoView({ block: 'start' });
 }
 
 function viewTreino() {
@@ -1164,8 +1231,15 @@ function renderBadges() {
 }
 function render() {
   const route = (location.hash.slice(1) || 'inicio').split('?')[0];
-  const views = { inicio: viewInicio, retornos: viewRetornos, vagas: viewVagas, treino: viewTreino, ajustes: viewAjustes };
+  const views = { inicio: viewInicio, retornos: viewRetornos, vagas: viewVagas, treino: viewTreino, ajustes: viewAjustes, livro: viewLivro };
   const name = views[route] ? route : 'inicio';
+  // o livro é grande: redesenhar a cada sincronização perderia a leitura; só redesenha se mudou a versão
+  if (name === 'livro' && S.route === 'livro' && S.livro && $('#view').dataset.livro === S.livro.sha) {
+    renderSync();
+    renderBadges();
+    return;
+  }
+  const entrouNoLivro = name === 'livro' && S.route !== 'livro';
   if (name !== 'retornos') clearTimeout(autoReadTimer);
   if (name !== S.route) {
     if (S.route === 'vagas') S.vagasVistoAntes = S.vagasVisto;  // saiu de Vagas: as vistas deixam de ser "novas"
@@ -1180,9 +1254,16 @@ function render() {
     window.scrollTo(0, 0);
   }
   for (const a of document.querySelectorAll('.tabs a')) {
-    if (a.dataset.tab === name) a.setAttribute('aria-current', 'page'); else a.removeAttribute('aria-current');
+    if (a.dataset.tab === (name === 'livro' ? 'treino' : name)) a.setAttribute('aria-current', 'page'); else a.removeAttribute('aria-current');
   }
   $('#view').innerHTML = !S.cfg && name !== 'ajustes' ? viewWelcome() : views[name]();
+  $('#view').dataset.livro = name === 'livro' && S.livro ? S.livro.sha : '';
+  // volta ao ponto onde parou de ler: ao entrar no livro, ou quando ele termina de carregar
+  if (name === 'livro' && S.livro && (entrouNoLivro || !S.livroPosto)) {
+    S.livroPosto = true;
+    requestAnimationFrame(() => window.scrollTo(0, store.get('livroY', 0)));
+  }
+  if (name !== 'livro') S.livroPosto = false;
   renderSync();
   renderBadges();
 }
@@ -1456,7 +1537,22 @@ document.addEventListener('input', e => {
   if (f) (S.pergForm[f.dataset.form] ||= {})[f.dataset.campo] = f.value;
 });
 
+// posição de leitura do livro, para voltar ao mesmo ponto
+let livroYTimer = 0;
+window.addEventListener('scroll', () => {
+  if (S.route !== 'livro' || !S.livro) return;
+  clearTimeout(livroYTimer);
+  livroYTimer = setTimeout(() => store.set('livroY', Math.round(window.scrollY)), 400);
+}, { passive: true });
+
 document.addEventListener('click', e => {
+  // links internos do livro (sumário, "veja o capítulo 12"): rolam até o ponto, sem mexer na rota do app
+  const link = e.target.closest('article.livro a[href^="#"]');
+  if (link) {
+    e.preventDefault();
+    irNoLivro(link.getAttribute('href').slice(1));
+    return;
+  }
   const el = e.target.closest('[data-act]');
   if (!el) return;
   const act = el.dataset.act;
@@ -1516,6 +1612,8 @@ document.addEventListener('click', e => {
     window.scrollTo(0, 0);
   } else if (act === 'pdf') {
     openPdf(el);
+  } else if (act === 'livro-ir') {
+    irNoLivro(el.dataset.alvo);
   } else if (act === 'refresh') {
     refreshNow();
   } else if (act === 'push-on') {
