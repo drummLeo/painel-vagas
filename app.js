@@ -997,8 +997,13 @@ function vozBlock(card, desde = '') {
       <div class="btns"><button class="btn primary" data-act="voz-enviar" ${attr}>Enviar para avaliar</button>
         <button class="btn" data-act="voz-gravar" ${attr}>Gravar de novo</button></div></div>`;
   }
-  if (vozPendente(card)) {
-    return `<div class="voz"><p class="lede">⏳ Avaliando no PC: o Whisper transcreve e o Ollama compara com o cartão. Leva 1 a 3 min, com o PC ligado.</p></div>`;
+  const pendente = vozPendente(card);
+  if (pendente) {
+    // dá para ouvir o que foi enviado enquanto espera: do aparelho logo após o envio; depois de reabrir o app,
+    // do ramo "audios" do repositório, onde o arquivo fica até o PC avaliar
+    const [aid, info] = pendente;
+    return `<div class="voz"><p class="lede">⏳ Avaliando no PC: o Whisper transcreve e o Ollama compara com o cartão. Leva 1 a 3 min, com o PC ligado.</p>
+      ${audioPlayer(`audios/${aid}.${info.ext || 'webm'}`, 'audios', 'Ouvir o que você enviou')}</div>`;
   }
   const av = avaliacaoDe(card, desde);
   const gravar = `<button class="btn" data-act="voz-gravar" ${attr}>🎤 ${av ? 'Responder de novo' : 'Responder em voz alta'}</button>`;
@@ -1157,9 +1162,10 @@ async function vozEnviar(card) {
       await gh('git/refs', { method: 'POST', body: { ref: 'refs/heads/audios', sha: base.object.sha } });
       await put();
     }
-    URL.revokeObjectURL(st.url);
+    // a gravação continua tocável enquanto o PC avalia: o mesmo endereço local serve ao player do envio
+    audioUrls[`audios:audios/${aid}.${ext}`] = st.url;
     delete S.voz[card];
-    S.audiosEnviados[aid] = { card, enviado_em: new Date().toISOString() };
+    S.audiosEnviados[aid] = { card, enviado_em: new Date().toISOString(), ext };
     store.set('audiosEnviados', S.audiosEnviados);
     toast('Enviado. A avaliação chega em 1 a 3 min, com o PC ligado.', 5000);
     vozAcompanhar();
