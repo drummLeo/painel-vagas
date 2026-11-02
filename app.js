@@ -795,11 +795,10 @@ function viewVagas() {
   return `<h1>Vagas</h1>${cartasAvulsas()}<div class="seg" role="group" aria-label="Filtro">${seg}</div>
     ${niveis}
     ${items ?`<div class="list">${items}</div>` : `<p class="empty">${empty}</p>`}
-    <p class="meta">As vagas ficam aqui por 30 dias depois de encontradas.</p>
-    ${buscaView()}`;
+    <p class="meta">As vagas ficam aqui por 30 dias depois de encontradas.</p>`;
 }
 
-// ---------- palavras-chave da busca: o app grava app/busca.json e o bot usa no lugar do config.toml ----------
+// ---------- palavras-chave da busca (em Ajustes): o app grava app/busca.json e o bot usa no lugar do config.toml ----------
 // O bot publica em data/busca.json o que está valendo ("em_uso") e o padrão do config.toml ("padrao").
 const BUSCA_PATH = 'app/busca.json';
 const BUSCA_LISTAS = [
@@ -1335,6 +1334,7 @@ function viewAjustes() {
     <p class="help">Para destacar ainda mais no Android: segure o ícone do Painel → Informações do app → Notificações,
       e ligue "Mostrar como pop-up" e "Ignorar Não perturbe" (os nomes mudam um pouco entre marcas).</p>
   </section>
+  ${S.cfg ? buscaView() : ''}
   <section class="panel">
     <h2>Aparência</h2>
     <div class="seg" role="group" aria-label="Tema">${[['auto', 'Automático'], ['light', 'Claro'], ['dark', 'Escuro']].map(([k, l]) =>
