@@ -1065,7 +1065,11 @@ const notaTexto = n => String(n).replace('.', ',');
 function notaView(a) {
   if (typeof a.nota !== 'number') return '';
   const cls = a.nota >= 8 ? 'ok' : a.nota >= 5 ? 'warn' : 'bad';
-  return `<div class="nota-aval"><span class="pill ${cls}">Nota ${notaTexto(a.nota)}<small>/10</small></span>${a.nota_motivo ? `<span class="meta">${esc(a.nota_motivo)}</span>` : ''}</div>`;
+  // nomes que o reconhecimento de voz não entendeu: cada um desconta 0,2 (fala pouco clara)
+  const pc = a.pouco_claro || [];
+  const clareza = pc.length ? `<p class="meta clareza">−${notaTexto(a.desconto_clareza)} por ${pc.length === 1 ? '1 nome pouco claro' : `${pc.length} nomes pouco claros`}:
+    ${pc.map(c => `“${esc(c.ouvido)}” (era ${esc(c.certo)})`).join('; ')}</p>` : '';
+  return `<div class="nota-aval"><span class="pill ${cls}">Nota ${notaTexto(a.nota)}<small>/10</small></span>${a.nota_motivo ? `<span class="meta">${esc(a.nota_motivo)}</span>` : ''}</div>${clareza}`;
 }
 
 // as seções que abrem e fecham lembram o estado: o app redesenha a tela (ao tocar um áudio, por exemplo)
