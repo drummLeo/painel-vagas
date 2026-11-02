@@ -323,7 +323,9 @@ function filaTreino(info) {
 }
 function cartaoAtual(info) {
   const fila = filaTreino(info);
-  return fila.includes(S.treinoAtual) ? S.treinoAtual : fila[0];
+  // um cartão já respondido hoje também pode ser aberto de novo (pelos atalhos), para rever ou trocar a marcação
+  if (S.treinoAtual && (fila.includes(S.treinoAtual) || (S.treinoAtual in info.answers && info.byId[S.treinoAtual]))) return S.treinoAtual;
+  return fila[0];
 }
 
 // ---------- telas ----------
@@ -1205,7 +1207,7 @@ function studyLibrary() {
   const acao = c => {
     if (!info) return '';
     const a = info.answers[c.id];
-    if (a !== undefined) return ` <span class="pill ${a ? 'ok' : 'warn'}">${a ? '✓' : '↻'} hoje</span>`;
+    if (a !== undefined) return ` <button class="pill ${a ? 'ok' : 'warn'}" data-act="treino-ir" data-id="${esc(c.id)}">${a ? '✓' : '↻'} hoje</button>`;
     return ` <button class="pill brand" data-act="treino-ir" data-id="${esc(c.id)}">🎯 Responder</button>`;
   };
   const body = decks.map(k => {
@@ -1311,9 +1313,13 @@ function viewTreino() {
   if (atual) {
     const c = info.byId[atual];
     const sug = info.ids.indexOf(c.id);
-    const origem = sug >= 0 ? `sugestão ${sug + 1} de ${info.ids.length}` : pulados.includes(c.id) ? 'pulado' : 'extra';
+    const resposta = info.answers[c.id];  // já marcado hoje?
+    // o bot conta só a primeira resposta do dia: depois que ele registra (t.respondidos), não dá mais para trocar
+    const registrada = resposta !== undefined && c.id in (info.t.respondidos || {});
+    const origem = resposta !== undefined ? 'respondido hoje' : sug >= 0 ? `sugestão ${sug + 1} de ${info.ids.length}`
+      : pulados.includes(c.id) ? 'pulado' : 'extra';
     // pular só faz sentido se houver outro cartão na fila para mostrar
-    const pular = fila.length > 1 ? `<button class="btn" data-act="pular" data-id="${esc(c.id)}">⏭ Pular</button>` : '';
+    const pular = resposta === undefined && fila.length > 1 ? `<button class="btn" data-act="pular" data-id="${esc(c.id)}">⏭ Pular</button>` : '';
     const answer = S.reveal ? `<ul class="answer anim">${c.a.map(x => `<li>${richText(x)}</li>`).join('')}</ul>` : '';
     const notes = S.reveal ? [
       modeloNote(c),
@@ -1324,7 +1330,10 @@ function viewTreino() {
     // a avaliação falada só conta se for de hoje (de outro dia seria outra tentativa)
     const voz = vozBlock(c.id, new Date(Date.now() - 18 * 3600e3).toISOString());
     // "Já sei" e "Preciso revisar" ficam sempre à mão, mesmo sem abrir a resposta
-    const marcar = `<div class="btns two"><button class="btn warn" data-act="answer" data-id="${esc(c.id)}" data-knew="0">🔁 Preciso revisar</button><button class="btn ok" data-act="answer" data-id="${esc(c.id)}" data-knew="1">✅ Já sei</button></div>`;
+    const botoes = `<div class="btns two"><button class="btn warn" data-act="answer" data-id="${esc(c.id)}" data-knew="0">🔁 Preciso revisar</button><button class="btn ok" data-act="answer" data-id="${esc(c.id)}" data-knew="1">✅ Já sei</button></div>`;
+    const marcado = resposta === undefined ? '' : `<p class="note marcado">Você marcou hoje: <strong>${resposta ? '✅ Já sei' : '🔁 Preciso revisar'}</strong>.
+      ${registrada ? 'O bot já registrou essa resposta na revisão espaçada; este cartão fica aberto só para rever e praticar.' : 'Dá para trocar até a próxima execução do bot.'}</p>`;
+    const marcar = marcado + (registrada ? '' : botoes);
     const foot = S.reveal
       ? `<button class="btn" data-act="ocultar">Ocultar resposta</button>${voz}${notes}${marcar}${pular.replace('⏭ Pular', '⏭ Pular e responder depois')}`
       : `<p class="meta" style="margin:0">Responda em voz alta e só depois veja a resposta. Gravando, o PC confere a sua resposta com o cartão.</p>${voz}<div class="btns${pular ? ' two' : ''}">${pular}<button class="btn primary" data-act="reveal">Mostrar resposta</button></div>${marcar}`;
@@ -1333,11 +1342,11 @@ function viewTreino() {
       <div class="flash-body"><p class="q">${richText(c.q)}</p>${answer}</div>
       <div class="flash-foot">${foot}</div></article>`);
   }
-  // atalhos: as sugestões do dia e os pulados abrem o cartão; respondidos só mostram o resultado
+  // atalhos: as sugestões do dia e os pulados abrem o cartão (os já respondidos também, para rever)
   const titulo = id => esc(info.byId[id].q.replace(/<[^>]+>/g, ''));
   const chip = (id, rotulo) => {
     const a = info.answers[id];
-    if (a !== undefined) return `<span class="pill ${a ? 'ok' : 'warn'}" title="${titulo(id)}">${a ? '✓' : '↻'} ${rotulo}</span>`;
+    if (a !== undefined) return `<button class="pill ${a ? 'ok' : 'warn'}" data-act="treino-ir" data-id="${esc(id)}" title="${titulo(id)}"${id === atual ? ' aria-current="true"' : ''}>${a ? '✓' : '↻'} ${rotulo}</button>`;
     return `<button class="pill brand" data-act="treino-ir" data-id="${esc(id)}" title="${titulo(id)}"${id === atual ? ' aria-current="true"' : ''}>· ${rotulo}</button>`;
   };
   const curto = id => { const q = info.byId[id].q.replace(/<[^>]+>/g, ''); return esc(q.length > 34 ? q.slice(0, 33) + '…' : q); };

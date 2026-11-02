@@ -213,6 +213,8 @@ code { font-family: var(--f-mono); font-size: .86em; background: var(--note); pa
 .note { background: var(--note); border-radius: 8px; padding: 10px 12px; font-size: 15px; }
 .note strong { display: block; font: 600 11px/1.4 var(--f-mono); letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
 .note.check { background: var(--warn-soft); }
+.note.marcado { margin: 0; }
+.note.marcado strong { display: inline; font: inherit; font-weight: 700; letter-spacing: 0; text-transform: none; color: var(--ink); }
 .note.check strong { color: var(--warn); }
 .chips { display: flex; flex-wrap: wrap; gap: 6px; }
 button.pill { border: 0; font-family: inherit; cursor: pointer; line-height: 1.5; }
