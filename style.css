@@ -144,6 +144,9 @@ details.mail summary { cursor: pointer; color: var(--accent); font-weight: 600; 
 .niveis button { border: 1px solid var(--line); background: var(--card); color: var(--muted); border-radius: 999px; padding: 6px 12px; font-size: 13px; font-weight: 600; cursor: pointer; }
 .niveis button[aria-pressed="true"] { background: var(--brand-soft); border-color: var(--brand); color: var(--brand); }
 .niveis .n { font-variant-numeric: tabular-nums; opacity: .8; }
+.nota-aval { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 10px; }
+.nota-aval .pill { font-size: 15px; padding: 3px 10px; }
+.nota-aval small { font-weight: 600; opacity: .7; }
 /* ações pendentes (topo do Início e Retornos → Ações) */
 .acoes-topo { gap: 8px; }
 .acao-linha { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 8px 0; border-top: 1px solid var(--line); }

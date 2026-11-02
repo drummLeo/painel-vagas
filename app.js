@@ -1053,7 +1053,14 @@ function resumoAval(a) {
   if (!a || a.erro) return 'sem avaliação';
   const p = a.pontos || [];
   const n = (a.erros || []).length;
-  return `${p.filter(x => x.status === 'coberto').length} de ${p.length} pontos · ${n === 1 ? '1 erro' : `${n} erros`}`;
+  return `${typeof a.nota === 'number' ? `nota ${notaTexto(a.nota)} · ` : ''}${p.filter(x => x.status === 'coberto').length} de ${p.length} pontos · ${n === 1 ? '1 erro' : `${n} erros`}`;
+}
+const notaTexto = n => String(n).replace('.', ',');
+// a nota que o modelo deu à resposta falada (avaliações antigas não têm)
+function notaView(a) {
+  if (typeof a.nota !== 'number') return '';
+  const cls = a.nota >= 8 ? 'ok' : a.nota >= 5 ? 'warn' : 'bad';
+  return `<div class="nota-aval"><span class="pill ${cls}">Nota ${notaTexto(a.nota)}<small>/10</small></span>${a.nota_motivo ? `<span class="meta">${esc(a.nota_motivo)}</span>` : ''}</div>`;
 }
 
 // a tentativa anterior ao lado da última (áudio e avaliação), quando houver
@@ -1084,6 +1091,7 @@ function avaliacaoView(a, aid = '') {
   const erros = (a.erros || []).map(e => `<li>Você disse “${esc(e.disse)}”; o cartão diz “${esc(e.cartao)}”.</li>`).join('');
   const sug = a.sugestao === 'ja_sei' ? '✅ Já sei' : '🔁 Preciso revisar';
   return `<div class="avaliacao">
+    ${notaView(a)}
     ${aid ? audioDaAvaliacao(aid, a.card) : ''}
     <details><summary>O que você disse</summary><div class="carta-texto">${esc(a.transcricao || '')}</div></details>
     ${pontos ? `<ul class="pontos">${pontos}</ul>` : ''}
