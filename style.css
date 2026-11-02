@@ -120,6 +120,9 @@ details.mail summary { cursor: pointer; color: var(--accent); font-weight: 600; 
 .btn.primary { background: var(--brand); border-color: var(--brand); color: var(--brand-ink); }
 .btn.ok { color: var(--ok); }
 .btn.warn { color: var(--warn); }
+/* "Já sei" e "Preciso revisar" no cartão do treino: fundo colorido, para não confundir com "Pular" */
+.flash-foot .btn[data-act="answer"].ok { background: var(--ok-soft); border-color: var(--ok); }
+.flash-foot .btn[data-act="answer"].warn { background: var(--warn-soft); border-color: var(--warn); }
 .btn[aria-pressed="true"].ok { background: var(--ok-soft); border-color: var(--ok); }
 .btn[aria-pressed="true"].warn { background: var(--warn-soft); border-color: var(--warn); }
 .btn:disabled { opacity: .55; cursor: default; }
