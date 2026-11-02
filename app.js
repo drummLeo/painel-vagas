@@ -1313,9 +1313,11 @@ function viewTreino() {
     ].join('') : '';
     // a avaliação falada só conta se for de hoje (de outro dia seria outra tentativa)
     const voz = vozBlock(c.id, new Date(Date.now() - 18 * 3600e3).toISOString());
+    // "Já sei" e "Preciso revisar" ficam sempre à mão, mesmo sem abrir a resposta
+    const marcar = `<div class="btns two"><button class="btn warn" data-act="answer" data-id="${esc(c.id)}" data-knew="0">🔁 Preciso revisar</button><button class="btn ok" data-act="answer" data-id="${esc(c.id)}" data-knew="1">✅ Já sei</button></div>`;
     const foot = S.reveal
-      ? `<button class="btn" data-act="ocultar">Ocultar resposta</button>${voz}${notes}<div class="btns two"><button class="btn warn" data-act="answer" data-id="${esc(c.id)}" data-knew="0">🔁 Preciso revisar</button><button class="btn ok" data-act="answer" data-id="${esc(c.id)}" data-knew="1">✅ Já sei</button></div>${pular.replace('⏭ Pular', '⏭ Pular e responder depois')}`
-      : `<p class="meta" style="margin:0">Responda em voz alta e só depois veja a resposta. Gravando, o PC confere a sua resposta com o cartão.</p>${voz}<div class="btns${pular ? ' two' : ''}">${pular}<button class="btn primary" data-act="reveal">Mostrar resposta</button></div>`;
+      ? `<button class="btn" data-act="ocultar">Ocultar resposta</button>${voz}${notes}${marcar}${pular.replace('⏭ Pular', '⏭ Pular e responder depois')}`
+      : `<p class="meta" style="margin:0">Responda em voz alta e só depois veja a resposta. Gravando, o PC confere a sua resposta com o cartão.</p>${voz}<div class="btns${pular ? ' two' : ''}">${pular}<button class="btn primary" data-act="reveal">Mostrar resposta</button></div>${marcar}`;
     parts.push(`<article class="flash">
       <div class="flash-head"><span><span class="tag">${esc(info.labels[c.deck] || c.deck)}</span> · ${origem}</span><span>alvo ${esc(c.tempo || '1 min')}</span></div>
       <div class="flash-body"><p class="q">${richText(c.q)}</p>${answer}</div>

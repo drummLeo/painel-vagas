@@ -1,5 +1,5 @@
 // Service worker do Painel: guarda o app para abrir sem rede e mostra as notificações push.
-const CACHE = 'painel-v29';
+const CACHE = 'painel-v30';
 const SHARE = 'painel-compartilhado';  // texto recebido pelo "Compartilhar" do Android, até o app ler
 const LIVRO = 'painel-livro';          // o livro de estudo, gravado pelo app para abrir sem rede
 const ASSETS = ['./', 'index.html', 'style.css', 'app.js', 'manifest.webmanifest',
