@@ -175,6 +175,11 @@ details.busca[open] { gap: 14px; }
 .btn.link { border: 0; background: none; min-height: 0; padding: 4px 0; color: var(--accent); font-weight: 600; }
 .busca-lista .btn.link { justify-self: start; }
 .job h2 { font-size: 16px; }
+.job .tags { display: flex; flex-wrap: wrap; gap: 6px; margin: 2px 0 4px; }
+.pill.modo-remote { background: var(--ok-soft); color: var(--ok); }
+.pill.modo-hybrid { background: var(--brand-soft); color: var(--brand); }
+.pill.modo-on-site { background: var(--warn-soft); color: var(--warn); }
+.pill.modo-x, .pill.horario { background: none; border: 1px solid var(--line); color: var(--muted); font-weight: 600; }
 .job.done { opacity: .72; }
 
 /* treino */

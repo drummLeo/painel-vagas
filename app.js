@@ -815,6 +815,16 @@ function cartasAvulsas() {
     ${items ? `<div class="list">${items}</div>` : ''}`;
 }
 
+// tags da vaga: a modalidade (sempre, "não informada" quando a fonte não diz) e o horário, quando o bot achou
+const MODALIDADES = { remote: 'Remota', hybrid: 'Híbrida', 'on-site': 'Presencial' };
+function vagaTags(v) {
+  const modo = MODALIDADES[v.modelo]
+    ? `<span class="pill modo-${v.modelo}">${MODALIDADES[v.modelo]}</span>`
+    : '<span class="pill modo-x">Modalidade não informada</span>';
+  const hora = v.horario ? `<span class="pill horario">🕒 ${esc(v.horario)}</span>` : '';
+  return `<div class="tags">${modo}${hora}</div>`;
+}
+
 function viewVagas() {
   const all = S.data.vagas || [];
   const links = retornoPorVaga();
@@ -847,12 +857,13 @@ function viewVagas() {
   const items = extra + groups[f].filter(v => passa(v.titulo)).slice(0, 150).map(v => {
     const st = vagaStatus(v.id, links);
     const isNew = v.encontrada_em > S.vagasVistoAntes && !st;
-    // o bot preenche local e modelo vazios com "Não informado"; aqui eles só ocupariam a linha
-    const where = [v.empresa, v.local, v.modelo_texto].filter(x => x && x !== 'Não informado').join(' · ');
+    // o bot preenche local vazio com "Não informado"; aqui ele só ocuparia a linha (a modalidade vai na tag)
+    const where = [v.empresa, v.local].filter(x => x && x !== 'Não informado').join(' · ');
     const r = links[v.id];
     return `<article class="panel job ${st === 'descartada' ? 'done' : ''}">
       ${r ? `<div class="row"><a class="pill ${tipoDe(r).cls}" href="#retornos" style="text-decoration:none">${tipoDe(r).label}</a><span class="meta">${esc(rel(quando(r)))}</span></div>` : ''}
       <h2>${isNew ? '<span class="newdot" title="Nova"></span>' : ''}${esc(v.titulo)}</h2>
+      ${vagaTags(v)}
       ${where ? `<div class="meta">${esc(where)}</div>` : ''}
       <div class="meta">${esc(v.fonte)} · encontrada ${esc(rel(v.encontrada_em))}</div>
       <div class="btns">
