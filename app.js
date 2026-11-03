@@ -1049,6 +1049,8 @@ function avaliacaoDe(card, desde = '') {
     .sort((a, b) => (b[1].avaliada_em || '').localeCompare(a[1].avaliada_em || ''))[0];
 }
 
+const AVAL_NORMAL_MIN = 5;  // até quanto a avaliação de um áudio é normal (o PC olha o ramo a cada 2 min)
+
 function vozPendente(card) {
   return Object.entries(S.audiosEnviados).find(([aid, a]) => a.card === card && !(S.data.avaliacoes || {})[aid]);
 }
@@ -1084,11 +1086,13 @@ function vozBlock(card, desde = '') {
     // do ramo "audios" do repositório, onde o arquivo fica até o PC avaliar
     const [aid, info] = pendente;
     // o app relê os dados a cada 40 s enquanto espera (vozAcompanhar): o aviso aparece sozinho quando passa do normal
+    // o PC olha o ramo a cada 2 min, e transcrever + avaliar leva de 1 a 3 min: passou de AVAL_NORMAL_MIN, avisa
     const min = Math.floor((Date.now() - Date.parse(info.enviado_em)) / 60e3);
-    const demora = min >= 5 ? `<p class="note check"><strong>Está demorando mais que o normal (${min} min)</strong>
+    const quando = min < 1 ? 'agora há pouco' : `há ${min} min`;
+    const demora = min > AVAL_NORMAL_MIN ? `<p class="note check"><strong>Está demorando mais que o normal (${min} min)</strong>
       ${githubInstavel() ? 'O GitHub está instável (veja o aviso no topo): o PC só recebe o áudio quando ele voltar. '
-        : 'O PC precisa estar ligado e com acesso ao GitHub. '}Se ele ficar mais de 30 min sem acesso, chega um aviso no celular.</p>` : '';
-    return `<div class="voz"><p class="lede">⏳ Avaliando no PC: o Whisper transcreve e o Ollama compara com o cartão. Leva 1 a 3 min, com o PC ligado.</p>
+        : 'Pode ser o PC ocupado com outra avaliação, desligado ou sem acesso ao GitHub. '}Se ele ficar mais de 30 min sem acesso, chega um aviso no celular.</p>` : '';
+    return `<div class="voz"><p class="lede">⏳ Avaliando no PC (enviado ${quando}): o Whisper transcreve e o Ollama compara com o cartão. Costuma levar de 2 a ${AVAL_NORMAL_MIN} min, com o PC ligado.</p>
       ${demora}${audioPlayer(`audios/${aid}.${info.ext || 'webm'}`, 'audios', 'Ouvir o que você enviou')}
       <div class="btns"><button class="btn" data-act="voz-cancelar" data-aid="${esc(aid)}">✕ Cancelar envio</button></div></div>`;
   }
@@ -1272,7 +1276,7 @@ async function vozEnviar(card) {
     await subirAudio(aid, ext, st.blob);
     delete S.voz[card];
     audioEnviado(aid, card, ext, st.url);
-    toast('Enviado. A avaliação chega em 1 a 3 min, com o PC ligado.', 5000);
+    toast(`Enviado. A avaliação costuma chegar em 2 a ${AVAL_NORMAL_MIN} min, com o PC ligado.`, 5000);
   } catch (e) {
     if (falhaPassageira(e) && await filaGuardar({ aid, card, ext, blob: st.blob, criado: new Date().toISOString() })) {
       delete S.voz[card];
@@ -1368,13 +1372,13 @@ async function filaProcessar() {
   } catch { /* sem IndexedDB */ }
   store.set('filaAudios', S.filaAudios);
   filaRodando = false;
-  if (enviados) toast(enviados === 1 ? 'A gravação guardada foi enviada. A avaliação chega em 1 a 3 min.' : `${enviados} gravações guardadas foram enviadas.`, 5000);
+  if (enviados) toast(enviados === 1 ? `A gravação guardada foi enviada. A avaliação costuma chegar em 2 a ${AVAL_NORMAL_MIN} min.` : `${enviados} gravações guardadas foram enviadas.`, 5000);
   filaAgendar();
   render();
 }
 
 // enquanto houver áudio sem avaliação, relê os dados de vez em quando (por até 20 min)
-let vozTimer = 0;
+let vozTimer = 0, vozRelogio = 0;
 function vozAcompanhar() {
   clearTimeout(vozTimer);
   // espera até 3 h (numa queda do GitHub, a avaliação chega bem depois); depois dos primeiros 20 min, relê a cada 3 min
@@ -1386,6 +1390,11 @@ function vozAcompanhar() {
   const enviados = Object.values(S.audiosEnviados);
   if (!enviados.length) return;
   const recente = enviados.some(a => Date.now() - Date.parse(a.enviado_em) < 20 * 60e3);
+  clearInterval(vozRelogio);
+  vozRelogio = setInterval(() => {
+    if (!Object.keys(S.audiosEnviados).length) return clearInterval(vozRelogio);
+    if (S.route === 'treino' && !vozRec.rec) render();  // atualiza o "enviado há N min" e o aviso de demora
+  }, 30e3);
   vozTimer = setTimeout(() => loadAll().then(vozAcompanhar), recente ? 40e3 : 180e3);
 }
 
