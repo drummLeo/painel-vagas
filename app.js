@@ -44,6 +44,7 @@ const S = {
   voz: {},                                 // gravação pronta para enviar, por cartão ({blob, url})
   audiosEnviados: store.get('audiosEnviados', {}),  // áudios enviados ainda sem avaliação: aid -> {card, enviado_em}
   filaAudios: store.get('filaAudios', {}),  // gravações guardadas no aparelho esperando o GitHub: aid -> {card, ext, criado}
+  audiosCancelados: store.get('audiosCancelados', {}),  // envios cancelados: a avaliação, se ainda chegar, é ignorada
 };
 
 // ---------- utilidades ----------
@@ -1044,7 +1045,7 @@ const VOZ_MAX_S = 180;
 const vozRec = { card: '', rec: null, partes: [], inicio: 0, timer: 0 };
 
 function avaliacaoDe(card, desde = '') {
-  return Object.entries(S.data.avaliacoes || {}).filter(([, a]) => a.card === card && (a.avaliada_em || '') >= desde)
+  return Object.entries(S.data.avaliacoes || {}).filter(([aid, a]) => a.card === card && (a.avaliada_em || '') >= desde && !S.audiosCancelados[aid])
     .sort((a, b) => (b[1].avaliada_em || '').localeCompare(a[1].avaliada_em || ''))[0];
 }
 
@@ -1065,7 +1066,7 @@ function vozBlock(card, desde = '') {
     const [aid] = naFila;
     return `<div class="voz"><p class="lede">📥 Gravação guardada no aparelho: o GitHub não respondeu. Ela sobe sozinha quando ele voltar, e aí o PC avalia.</p>
       ${filaUrls[aid] ? `<audio controls src="${filaUrls[aid]}"></audio>` : ''}
-      <div class="btns"><button class="btn" data-act="fila-tentar">Tentar enviar agora</button></div></div>`;
+      <div class="btns two"><button class="btn" data-act="fila-cancelar" data-aid="${esc(aid)}">✕ Cancelar envio</button><button class="btn" data-act="fila-tentar">Tentar enviar agora</button></div></div>`;
   }
   if (st.url) {
     const u = (S.data.ultimos || {})[card];
@@ -1088,7 +1089,8 @@ function vozBlock(card, desde = '') {
       ${githubInstavel() ? 'O GitHub está instável (veja o aviso no topo): o PC só recebe o áudio quando ele voltar. '
         : 'O PC precisa estar ligado e com acesso ao GitHub. '}Se ele ficar mais de 30 min sem acesso, chega um aviso no celular.</p>` : '';
     return `<div class="voz"><p class="lede">⏳ Avaliando no PC: o Whisper transcreve e o Ollama compara com o cartão. Leva 1 a 3 min, com o PC ligado.</p>
-      ${demora}${audioPlayer(`audios/${aid}.${info.ext || 'webm'}`, 'audios', 'Ouvir o que você enviou')}</div>`;
+      ${demora}${audioPlayer(`audios/${aid}.${info.ext || 'webm'}`, 'audios', 'Ouvir o que você enviou')}
+      <div class="btns"><button class="btn" data-act="voz-cancelar" data-aid="${esc(aid)}">✕ Cancelar envio</button></div></div>`;
   }
   const av = avaliacaoDe(card, desde);
   const gravar = `<button class="btn" data-act="voz-gravar" ${attr}>🎤 ${av ? 'Responder de novo' : 'Responder em voz alta'}</button>`;
@@ -1281,6 +1283,32 @@ async function vozEnviar(card) {
       toast(e.status ? errText(e) : `Não deu para enviar: ${e.message}`, 6000);
     }
   }
+  render();
+}
+
+// Cancelar um envio que espera o PC: apaga o arquivo do ramo "audios". Se o PC já tiver baixado o áudio, a
+// avaliação ainda pode chegar, e o app a ignora (audiosCancelados). Se o arquivo já saiu do ramo, o PC terminou.
+async function vozCancelar(aid) {
+  const info = S.audiosEnviados[aid];
+  if (!info) return;
+  const caminho = `contents/audios/${aid}.${info.ext || 'webm'}`;
+  try {
+    for (let tentativa = 0; ; tentativa++) {
+      const f = await gh(`${caminho}?ref=audios`);
+      try {
+        await gh(caminho, { method: 'DELETE', body: { message: 'painel: envio de áudio cancelado', sha: f.sha, branch: 'audios' } });
+        break;
+      } catch (e) { if (e.status !== 409 || tentativa) throw e; }  // o ramo andou no meio: relê e tenta de novo
+    }
+  } catch (e) {
+    if (e.status === 404) return toast('O PC já avaliou este áudio: não dá mais para cancelar. A avaliação aparece na próxima atualização.', 6000);
+    return toast(falhaPassageira(e) ? 'O GitHub não respondeu. Tente cancelar de novo em instantes.' : errText(e), 6000);
+  }
+  delete S.audiosEnviados[aid];
+  store.set('audiosEnviados', S.audiosEnviados);
+  S.audiosCancelados = { ...S.audiosCancelados, [aid]: new Date().toISOString() };
+  store.set('audiosCancelados', S.audiosCancelados);
+  toast('Envio cancelado.');
   render();
 }
 
@@ -2139,6 +2167,22 @@ document.addEventListener('click', e => {
     vozEnviar(el.dataset.id);
   } else if (act === 'fila-tentar') {
     filaProcessar();
+  } else if (act === 'fila-cancelar') {
+    // a gravação ainda está só no aparelho: descartar é sempre possível (exceto no instante em que ela sobe)
+    if (filaRodando) return toast('A gravação está subindo agora. Se ela chegar, cancele o envio em seguida.');
+    const aid = el.dataset.aid;
+    filaOp('readwrite', s => s.delete(aid)).catch(() => {}).then(() => {
+      delete S.filaAudios[aid];
+      store.set('filaAudios', S.filaAudios);
+      if (filaUrls[aid]) URL.revokeObjectURL(filaUrls[aid]);
+      delete filaUrls[aid];
+      filaAgendar();
+      toast('Envio cancelado. A gravação foi descartada.');
+      render();
+    });
+  } else if (act === 'voz-cancelar') {
+    el.disabled = true;
+    vozCancelar(el.dataset.aid);
   } else if (act === 'filtro') {
     S.vagasFiltro = el.dataset.f;
     store.set('vagasFiltro', S.vagasFiltro);
