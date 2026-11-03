@@ -80,7 +80,8 @@ function domain(email) { return (email || '').split('@')[1] || ''; }
 function normMarks(m) {
   m = m && typeof m === 'object' ? m : {};
   return { vagas: m.vagas || {}, retornos_lidos: m.retornos_lidos || {}, treino: m.treino || {}, cartas: m.cartas || {},
-    perguntas: m.perguntas || {}, banco: m.banco || {}, acoes_feitas: m.acoes_feitas || {} };
+    perguntas: m.perguntas || {}, banco: m.banco || {}, acoes_feitas: m.acoes_feitas || {},
+    entrevistas: m.entrevistas || {} };  // cartões de entrevistas específicas: id -> {sei, em} (o bot não lê)
 }
 function deepMerge(a, b) {
   if (!a || typeof a !== 'object' || Array.isArray(a)) return b;
@@ -1343,11 +1344,20 @@ function quandoEntrevista(iso) {
 // o que ainda depende de uma decisão sua aparece marcado
 const comLacunas = html => html.replace(/_{4,}/g, '<mark class="lacuna">____</mark>');
 
-// o cartão da vez, no mesmo formato do treino diário: começa no primeiro e segue em ordem, mas qualquer
-// cartão abre pelos atalhos. Não há "Já sei" / "Preciso revisar": estes cartões ficam fora da revisão espaçada.
+// o cartão aberto: o escolhido nos atalhos; sem escolha, o primeiro ainda não marcado (em ordem)
+function entrevistaAtual(e) {
+  const cs = e.cartoes;
+  const i = cs.findIndex(c => c.id === S.entAtual[e.id]);
+  if (i >= 0) return i;
+  const livre = cs.findIndex(c => !S.marks.entrevistas[c.id]);
+  return livre >= 0 ? livre : 0;
+}
+
+// o cartão da vez, no mesmo formato do treino diário: em ordem, mas qualquer cartão abre pelos atalhos.
+// "Já sei" / "Preciso revisar" ficam em marks.entrevistas (fora da revisão espaçada, que o bot calcula só com o treino).
 function entrevistaFlash(e) {
   const cs = e.cartoes;
-  const i = Math.max(0, cs.findIndex(c => c.id === S.entAtual[e.id]));
+  const i = entrevistaAtual(e);
   const c = cs[i];
   const ir = (k, rotulo) => `<button class="btn" data-act="ent-ir" data-ent="${esc(e.id)}" data-id="${esc(cs[k].id)}">${rotulo}</button>`;
   const anterior = i > 0 ? ir(i - 1, '← Anterior') : '';
@@ -1357,10 +1367,14 @@ function entrevistaFlash(e) {
   const answer = S.reveal ? `<ul class="answer anim">${(c.a || []).map(x => `<li>${comLacunas(richText(x))}</li>`).join('')}</ul>` : '';
   const notes = S.reveal ? modeloNote(c) + (c.extra ? `<div class="note"><strong>Se aprofundarem</strong>${comLacunas(richText(c.extra))}</div>` : '') : '';
   const nav = anterior || proximo ? `<div class="btns${anterior && proximo ? ' two' : ''}">${anterior}${proximo}</div>` : '';
+  // "Já sei" e "Preciso revisar" sempre à mão, como no treino diário; a marcação pode ser trocada quando quiser
+  const m = S.marks.entrevistas[c.id];
+  const marcar = (m ? `<p class="note marcado">Você marcou ${esc(rel(m.em))}: <strong>${m.sei ? '✅ Já sei' : '🔁 Preciso revisar'}</strong>. Dá para trocar quando quiser.</p>` : '')
+    + `<div class="btns two"><button class="btn warn" data-act="answer" data-ent="${esc(e.id)}" data-id="${esc(c.id)}" data-knew="0">🔁 Preciso revisar</button><button class="btn ok" data-act="answer" data-ent="${esc(e.id)}" data-id="${esc(c.id)}" data-knew="1">✅ Já sei</button></div>`;
   const foot = S.reveal
-    ? `<button class="btn" data-act="ocultar">Ocultar resposta</button>${voz}${notes}${nav}`
+    ? `<button class="btn" data-act="ocultar">Ocultar resposta</button>${voz}${notes}${marcar}${nav}`
     : `<p class="meta" style="margin:0">Responda em voz alta e só depois veja a resposta. Gravando, o PC confere a sua resposta com o cartão.</p>${voz}
-      <div class="btns${proximo ? ' two' : ''}">${proximo ? ir(i + 1, '⏭ Pular') : ''}<button class="btn primary" data-act="reveal">Mostrar resposta</button></div>`;
+      <div class="btns${proximo ? ' two' : ''}">${proximo ? ir(i + 1, '⏭ Pular') : ''}<button class="btn primary" data-act="reveal">Mostrar resposta</button></div>${marcar}`;
   return `<article class="flash">
     <div class="flash-head"><span><span class="tag">${esc(c.tema || e.empresa)}</span> · cartão ${i + 1} de ${cs.length}</span><span>alvo ${esc(c.tempo || '1 min')}</span></div>
     <div class="flash-body"><p class="q">${c.lingua === 'en' ? '<span class="pill brand">EN</span> ' : ''}${richText(c.q)}</p>${answer}</div>
@@ -1372,14 +1386,15 @@ function entrevistaPanel(e, passada = false) {
   const treino = Object.fromEntries(((S.data.cards || {}).cartoes || []).map(c => [c.id, c]));
   const revisar = (e.revisar || []).filter(id => treino[id]);
   const curto = q => { q = q.replace(/<[^>]+>/g, ''); return q.length > 30 ? q.slice(0, 29) + '…' : q; };
-  const praticados = e.cartoes.filter(c => avaliacaoDe(c.id)).length;
-  const atual = (e.cartoes.find(c => c.id === S.entAtual[e.id]) || e.cartoes[0] || {}).id;
-  // atalhos para qualquer cartão: a nota da última avaliação falada, quando houver
+  const sabidos = e.cartoes.filter(c => (S.marks.entrevistas[c.id] || {}).sei).length;
+  const atual = (e.cartoes[entrevistaAtual(e)] || {}).id;
+  // atalhos para qualquer cartão: ✓ / ↻ pela marcação e, quando houver, a nota da última avaliação falada
   const atalho = (c, k) => {
+    const m = S.marks.entrevistas[c.id];
     const av = avaliacaoDe(c.id);
-    const nota = av && typeof av[1].nota === 'number' ? av[1].nota : null;
-    const cls = !av ? 'brand' : nota === null || nota >= 8 ? 'ok' : 'warn';
-    return `<button class="pill ${cls}" data-act="ent-ir" data-ent="${esc(e.id)}" data-id="${esc(c.id)}" title="${esc(c.q.replace(/<[^>]+>/g, ''))}"${c.id === atual ? ' aria-current="true"' : ''}>${av ? (nota === null ? '✓' : notaTexto(nota)) : '·'} ${k + 1}. ${esc(curto(c.q))}</button>`;
+    const nota = av && typeof av[1].nota === 'number' ? ` ${notaTexto(av[1].nota)}` : '';
+    const cls = m ? (m.sei ? 'ok' : 'warn') : 'brand';
+    return `<button class="pill ${cls}" data-act="ent-ir" data-ent="${esc(e.id)}" data-id="${esc(c.id)}" title="${esc(c.q.replace(/<[^>]+>/g, ''))}"${c.id === atual ? ' aria-current="true"' : ''}>${m ? (m.sei ? '✓' : '↻') : '·'}${nota} ${k + 1}. ${esc(curto(c.q))}</button>`;
   };
   return `<section class="panel entrevista">
     <div class="row"><h2>🗓 ${esc(e.empresa)}</h2>${e.inicio ? `<span class="pill ${passada ? 'brand' : 'warn'}">${esc(quandoEntrevista(e.inicio))}</span>` : ''}</div>
@@ -1391,7 +1406,7 @@ function entrevistaPanel(e, passada = false) {
   </section>
   ${e.cartoes.length ? entrevistaFlash(e) : ''}
   <section class="panel treino-nav">
-    <div><p class="meta">Todos os cartões · ${praticados} de ${e.cartoes.length} já respondidos em voz alta · toque para abrir</p>
+    <div><p class="meta">Todos os cartões · ${sabidos} de ${e.cartoes.length} em “Já sei” · toque para abrir</p>
       <div class="chips">${e.cartoes.map(atalho).join('')}</div></div>
     ${revisar.length ? `<div class="revisar"><p class="meta">Revise também, no treino diário</p>
       <div class="chips">${revisar.map(id => `<button class="pill brand" data-act="treino-ir" data-id="${esc(id)}" title="${esc(treino[id].q.replace(/<[^>]+>/g, ''))}">${esc(curto(treino[id].q))}</button>`).join('')}</div></div>` : ''}
@@ -1992,6 +2007,21 @@ document.addEventListener('click', e => {
     // esconde de novo a resposta (para tentar outra vez sem olhar), mantendo o cartão na tela
     S.reveal = false;
     render();
+    const flash = $('#view .flash');
+    if (flash) flash.scrollIntoView({ block: 'start' });
+  } else if (act === 'answer' && el.dataset.ent) {
+    // cartão de entrevista específica: marca e vai para o próximo ainda não marcado (em ordem, dando a volta)
+    const e = entrevistasOrdenadas().proximas.concat(entrevistasOrdenadas().anteriores).find(x => x.id === el.dataset.ent);
+    if (!e) return;
+    const ids = e.cartoes.map(c => c.id);
+    const i = ids.indexOf(el.dataset.id);
+    const marcados = { ...S.marks.entrevistas, [el.dataset.id]: true };
+    const prox = [...ids.slice(i + 1), ...ids.slice(0, i)].find(id => !marcados[id]);
+    S.entAtual = { ...S.entAtual, [e.id]: prox || el.dataset.id };
+    store.set('entAtual', S.entAtual);
+    S.reveal = false;
+    if (!prox) toast('Todos os cartões desta entrevista foram marcados.');
+    setMarks(m => { m.entrevistas[el.dataset.id] = { sei: el.dataset.knew === '1', em: new Date().toISOString() }; });
     const flash = $('#view .flash');
     if (flash) flash.scrollIntoView({ block: 'start' });
   } else if (act === 'answer') {
