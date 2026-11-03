@@ -43,6 +43,7 @@ const S = {
   bancoAberto: false,
   voz: {},                                 // gravação pronta para enviar, por cartão ({blob, url})
   audiosEnviados: store.get('audiosEnviados', {}),  // áudios enviados ainda sem avaliação: aid -> {card, enviado_em}
+  filaAudios: store.get('filaAudios', {}),  // gravações guardadas no aparelho esperando o GitHub: aid -> {card, ext, criado}
 };
 
 // ---------- utilidades ----------
@@ -1017,6 +1018,13 @@ function vozBlock(card, desde = '') {
       <span class="meta">Gravando… até ${VOZ_MAX_S / 60} min.</span></div>`;
   }
   if (st.enviando) return `<div class="voz"><p class="meta">Enviando o áudio…</p></div>`;
+  const naFila = Object.entries(S.filaAudios).find(([, a]) => a.card === card);
+  if (naFila) {
+    const [aid] = naFila;
+    return `<div class="voz"><p class="lede">📥 Gravação guardada no aparelho: o GitHub não respondeu. Ela sobe sozinha quando ele voltar, e aí o PC avalia.</p>
+      ${filaUrls[aid] ? `<audio controls src="${filaUrls[aid]}"></audio>` : ''}
+      <div class="btns"><button class="btn" data-act="fila-tentar">Tentar enviar agora</button></div></div>`;
+  }
   if (st.url) {
     const u = (S.data.ultimos || {})[card];
     return `<div class="voz">
@@ -1173,6 +1181,36 @@ async function vozGravar(card) {
   render();
 }
 
+// sobe a gravação para o ramo "audios" do repositório (o PC avalia de lá)
+async function subirAudio(aid, ext, blob) {
+  const content = await new Promise((ok, erro) => {
+    const fr = new FileReader();
+    fr.onload = () => ok(String(fr.result).split(',')[1]);
+    fr.onerror = erro;
+    fr.readAsDataURL(blob);
+  });
+  const put = () => gh(`contents/audios/${aid}.${ext}`, { method: 'PUT', body: { message: 'painel: resposta falada do treino', content, branch: 'audios' } });
+  try { await put(); } catch (e) {
+    if (e.status !== 404 && e.status !== 422) throw e;
+    // o ramo "audios" ainda não existe (ou foi apagado): cria a partir do principal e tenta de novo
+    const base = await gh(`git/ref/heads/${S.cfg.branch || 'main'}`);
+    await gh('git/refs', { method: 'POST', body: { ref: 'refs/heads/audios', sha: base.object.sha } });
+    await put();
+  }
+}
+
+// o áudio chegou ao repositório: a partir daqui, é esperar a avaliação do PC
+function audioEnviado(aid, card, ext, url) {
+  // a gravação continua tocável enquanto o PC avalia: o mesmo endereço local serve ao player do envio
+  audioUrls[`audios:audios/${aid}.${ext}`] = url;
+  S.audiosEnviados[aid] = { card, enviado_em: new Date().toISOString(), ext };
+  store.set('audiosEnviados', S.audiosEnviados);
+  vozAcompanhar();
+}
+
+// falha do GitHub ou da rede (vale esperar e tentar de novo), e não do pedido em si (token, arquivo)
+const falhaPassageira = e => !e.status || e.status >= 500 || e.status === 429;
+
 async function vozEnviar(card) {
   const st = S.voz[card];
   if (!st || !st.blob) return;
@@ -1182,31 +1220,81 @@ async function vozEnviar(card) {
   S.voz[card] = { ...st, enviando: true };
   render();
   try {
-    const content = await new Promise((ok, erro) => {
-      const fr = new FileReader();
-      fr.onload = () => ok(String(fr.result).split(',')[1]);
-      fr.onerror = erro;
-      fr.readAsDataURL(st.blob);
-    });
-    const put = () => gh(`contents/audios/${aid}.${ext}`, { method: 'PUT', body: { message: 'painel: resposta falada do treino', content, branch: 'audios' } });
-    try { await put(); } catch (e) {
-      if (e.status !== 404 && e.status !== 422) throw e;
-      // o ramo "audios" ainda não existe (ou foi apagado): cria a partir do principal e tenta de novo
-      const base = await gh(`git/ref/heads/${S.cfg.branch || 'main'}`);
-      await gh('git/refs', { method: 'POST', body: { ref: 'refs/heads/audios', sha: base.object.sha } });
-      await put();
-    }
-    // a gravação continua tocável enquanto o PC avalia: o mesmo endereço local serve ao player do envio
-    audioUrls[`audios:audios/${aid}.${ext}`] = st.url;
+    await subirAudio(aid, ext, st.blob);
     delete S.voz[card];
-    S.audiosEnviados[aid] = { card, enviado_em: new Date().toISOString(), ext };
-    store.set('audiosEnviados', S.audiosEnviados);
+    audioEnviado(aid, card, ext, st.url);
     toast('Enviado. A avaliação chega em 1 a 3 min, com o PC ligado.', 5000);
-    vozAcompanhar();
   } catch (e) {
-    S.voz[card] = st;
-    toast(e.status ? errText(e) : `Não deu para enviar: ${e.message}`, 6000);
+    if (falhaPassageira(e) && await filaGuardar({ aid, card, ext, blob: st.blob, criado: new Date().toISOString() })) {
+      delete S.voz[card];
+      filaUrls[aid] = st.url;
+      toast('O GitHub não respondeu. A gravação ficou guardada no aparelho e sobe sozinha quando ele voltar.', 6000);
+    } else {
+      S.voz[card] = st;
+      toast(e.status ? errText(e) : `Não deu para enviar: ${e.message}`, 6000);
+    }
   }
+  render();
+}
+
+// ---------- fila de envio: gravações que esperam no aparelho (IndexedDB) até o GitHub voltar ----------
+// Numa instabilidade do GitHub (3/11), o envio falhava e a gravação só voltava a subir tocando em "Enviar" de novo.
+const FILA_DB = 'painel-fila';
+const filaUrls = {};  // aid -> URL do blob, para ouvir a gravação enquanto ela espera
+let filaTimer = 0, filaRodando = false;
+function filaOp(modo, fn) {
+  return new Promise((ok, erro) => {
+    const abrir = indexedDB.open(FILA_DB, 1);
+    abrir.onupgradeneeded = () => abrir.result.createObjectStore('audios', { keyPath: 'aid' });
+    abrir.onerror = () => erro(abrir.error);
+    abrir.onsuccess = () => {
+      const tx = abrir.result.transaction('audios', modo);
+      const req = fn(tx.objectStore('audios'));
+      tx.oncomplete = () => { abrir.result.close(); ok(req.result); };
+      tx.onerror = () => { abrir.result.close(); erro(tx.error); };
+    };
+  });
+}
+async function filaGuardar(item) {
+  try {
+    await filaOp('readwrite', s => s.put(item));
+    S.filaAudios = { ...S.filaAudios, [item.aid]: { card: item.card, ext: item.ext, criado: item.criado } };
+    store.set('filaAudios', S.filaAudios);
+    filaAgendar();
+    return true;
+  } catch { return false; }  // sem IndexedDB (navegação privada, por exemplo): fica o botão de enviar de novo
+}
+function filaAgendar(ms = 60e3) {
+  clearTimeout(filaTimer);
+  if (Object.keys(S.filaAudios).length) filaTimer = setTimeout(filaProcessar, ms);
+}
+async function filaProcessar() {
+  if (filaRodando || !S.cfg) return;
+  if (!navigator.onLine) return filaAgendar();
+  filaRodando = true;
+  let enviados = 0;
+  try {
+    const itens = (await filaOp('readonly', s => s.getAll())).sort((a, b) => a.criado.localeCompare(b.criado));
+    // o índice segue o que está guardado de fato (outra aba pode ter enviado)
+    S.filaAudios = Object.fromEntries(itens.map(x => [x.aid, { card: x.card, ext: x.ext, criado: x.criado }]));
+    for (const x of itens) {
+      filaUrls[x.aid] ||= URL.createObjectURL(x.blob);
+      try { await subirAudio(x.aid, x.ext, x.blob); } catch (e) {
+        // 422: o envio anterior chegou ao GitHub, só a resposta se perdeu (o arquivo já está lá)
+        const chegou = e.status === 422 && await gh(`contents/audios/${x.aid}.${x.ext}?ref=audios`).then(() => true, () => false);
+        if (!chegou) { if (falhaPassageira(e)) break; continue; }
+      }
+      await filaOp('readwrite', s => s.delete(x.aid));
+      delete S.filaAudios[x.aid];
+      audioEnviado(x.aid, x.card, x.ext, filaUrls[x.aid]);
+      delete filaUrls[x.aid];
+      enviados++;
+    }
+  } catch { /* sem IndexedDB */ }
+  store.set('filaAudios', S.filaAudios);
+  filaRodando = false;
+  if (enviados) toast(enviados === 1 ? 'A gravação guardada foi enviada. A avaliação chega em 1 a 3 min.' : `${enviados} gravações guardadas foram enviadas.`, 5000);
+  filaAgendar();
   render();
 }
 
@@ -1998,6 +2086,8 @@ document.addEventListener('click', e => {
     if (vozRec.rec) vozRec.rec.stop();
   } else if (act === 'voz-enviar') {
     vozEnviar(el.dataset.id);
+  } else if (act === 'fila-tentar') {
+    filaProcessar();
   } else if (act === 'filtro') {
     S.vagasFiltro = el.dataset.f;
     store.set('vagasFiltro', S.vagasFiltro);
@@ -2186,6 +2276,7 @@ document.addEventListener('change', e => {
 
 $('#sync').addEventListener('click', () => loadAll());
 window.addEventListener('hashchange', render);
+window.addEventListener('online', () => filaProcessar());  // a conexão voltou: sobe o que estava guardado
 document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'hidden') { if (S.dirty) { clearTimeout(saveTimer); saveMarks(); } return; }
   if (!S.data.at || Date.now() - S.data.at > 60e3) loadAll();
@@ -2210,6 +2301,6 @@ document.addEventListener('visibilitychange', () => {
   }
   render();
   checkPush().then(render);
-  loadAll().then(vozAcompanhar);
+  loadAll().then(vozAcompanhar).then(filaProcessar);  // gravações guardadas de antes sobem ao abrir o app
   lerCompartilhado();
 })();
