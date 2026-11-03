@@ -123,7 +123,18 @@ async function gh(path, { method = 'GET', body, raw = false, blob = false } = {}
     'X-GitHub-Api-Version': '2022-11-28',
   };
   if (body) headers['Content-Type'] = 'application/json';
-  const res = await fetch(url, { method, headers, cache: 'no-store', body: body ? JSON.stringify(body) : undefined });
+  // leituras com falha do GitHub (5xx, ou a resposta de erro sem CORS, que chega como falha de rede) tentam de novo
+  // duas vezes: numa instabilidade da API (3/11), algumas leituras davam 500 e o app inteiro ficava sem atualizar
+  let res;
+  for (let tentativa = 0; ; tentativa++) {
+    try {
+      res = await fetch(url, { method, headers, cache: 'no-store', body: body ? JSON.stringify(body) : undefined });
+      if (method !== 'GET' || res.status < 500 || tentativa >= 2) break;
+    } catch (e) {
+      if (method !== 'GET' || tentativa >= 2 || !navigator.onLine) throw e;
+    }
+    await new Promise(ok => setTimeout(ok, tentativa ? 4000 : 1500));
+  }
   if (!res.ok) {
     const err = new Error(`GitHub respondeu ${res.status}`);
     err.status = res.status;
