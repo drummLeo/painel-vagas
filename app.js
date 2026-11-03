@@ -179,12 +179,50 @@ function errText(e) {
   return e.message || 'Erro inesperado.';
 }
 
+// ---------- aviso de atraso: GitHub instável, gravações guardadas, avaliação demorando ----------
+// O status oficial do GitHub aceita leitura do navegador (CORS aberto). Só contam as partes que o Painel e o PC
+// usam: num incidente só do Copilot, o aviso não aparece.
+const GITHUB_STATUS = 'https://www.githubstatus.com/api/v2/summary.json';
+const COMPONENTES_USADOS = ['API Requests', 'Git Operations', 'Pages'];
+async function lerStatusGithub() {
+  if (S.githubStatus && Date.now() - S.githubStatus.at < 5 * 60e3) return false;
+  const antes = JSON.stringify(S.githubStatus && [S.githubStatus.ruins, S.githubStatus.incidentes]);
+  try {
+    const d = await (await fetch(GITHUB_STATUS, { cache: 'no-store' })).json();
+    const ruins = (d.components || []).filter(c => COMPONENTES_USADOS.includes(c.name) && c.status !== 'operational').map(c => c.name);
+    const incidentes = (d.incidents || []).filter(i => i.status !== 'resolved' && ((i.components || []).some(c => COMPONENTES_USADOS.includes(c.name))
+      || /\bAPI\b|\bGit\b|\bPages\b/.test(i.name || ''))).map(i => i.name);
+    S.githubStatus = { at: Date.now(), ruins, incidentes };
+  } catch {
+    S.githubStatus = { at: Date.now(), ruins: [], incidentes: [] };  // sem a página de status, vale só o erro da leitura
+  }
+  return antes !== JSON.stringify([S.githubStatus.ruins, S.githubStatus.incidentes]);
+}
+const githubInstavel = () => Boolean(S.erroGithub || (S.githubStatus && (S.githubStatus.ruins.length || S.githubStatus.incidentes.length)));
+
+function atrasoAviso() {
+  const gs = S.githubStatus || { ruins: [], incidentes: [] };
+  const fila = Object.keys(S.filaAudios).length;
+  const partes = [];
+  if (S.erroGithub) {
+    partes.push(`O GitHub não respondeu na última atualização (${esc(rel(S.erroGithub))}). Você está vendo os dados guardados${S.data.at ? ` de ${esc(rel(new Date(S.data.at).toISOString()))}` : ''}; o app tenta de novo sozinho.`);
+  }
+  if (gs.incidentes.length || gs.ruins.length) {
+    partes.push(`O status oficial do GitHub informa instabilidade${gs.incidentes.length ? `: “${esc(gs.incidentes[0])}”` : ` em ${esc(gs.ruins.join(', '))}`}. Avaliações dos áudios, cartas e dados novos podem atrasar.`);
+  }
+  if (fila) partes.push(`${plural(fila, 'gravação guardada', 'gravações guardadas')} no aparelho, esperando para subir.`);
+  if (!partes.length) return '';
+  return `<div class="panel alert atraso"><h2>⏳ Pode haver atraso</h2>${partes.map(p => `<p class="lede">${p}</p>`).join('')}
+    <p class="meta">Marcações e gravações ficam guardadas e sobem sozinhas quando ele voltar. <a href="https://www.githubstatus.com" target="_blank" rel="noopener">Status do GitHub</a></p></div>`;
+}
+
 // ---------- dados ----------
 async function loadAll() {
   if (!S.cfg || S.loading) return;
   S.loading = true;
   S.error = '';
   renderSync();
+  lerStatusGithub().then(mudou => { if (mudou) render(); });
   try {
     // os cartões mudam pouco: relidos a cada 30 min (o "empresas" entra na conta para quem tinha dados de antes dele)
     const cardsFresh = S.data.cards && S.data.modelos && 'empresas' in S.data && Date.now() - (S.data.cardsAt || 0) < 30 * 60e3;
@@ -209,8 +247,11 @@ async function loadAll() {
     if (S.dirty) scheduleSave(500);
     autoRun();
     renewPushIfKeyChanged();
+    S.erroGithub = '';
   } catch (e) {
     S.error = errText(e);
+    // falha do GitHub (e não do token ou da configuração): vira o aviso de atraso no topo, com hora
+    S.erroGithub = falhaPassageira(e) ? new Date().toISOString() : '';
   }
   S.loading = false;
   render();
@@ -487,7 +528,8 @@ function viewInicio() {
   const bot = S.data.status && S.data.status.atualizado_em;
   parts.push(`<div class="row"><span class="meta">${bot ? `Bot rodou ${esc(rel(bot))}` : ''}</span>
     <button class="btn" data-act="refresh">Atualizar agora</button></div>`);
-  return `<h1>Início</h1>${S.error ? `<div class="panel alert"><p class="lede">${esc(S.error)}</p></div>` : ''}${parts.join('')}`;
+  // erro do GitHub já aparece no aviso de atraso, no topo; aqui fica o resto (token, configuração)
+  return `<h1>Início</h1>${S.error && !S.erroGithub ? `<div class="panel alert"><p class="lede">${esc(S.error)}</p></div>` : ''}${parts.join('')}`;
 }
 
 // No computador, o link abre a conversa no Gmail. No celular o Gmail ignora o link e abre só a
@@ -1040,8 +1082,13 @@ function vozBlock(card, desde = '') {
     // dá para ouvir o que foi enviado enquanto espera: do aparelho logo após o envio; depois de reabrir o app,
     // do ramo "audios" do repositório, onde o arquivo fica até o PC avaliar
     const [aid, info] = pendente;
+    // o app relê os dados a cada 40 s enquanto espera (vozAcompanhar): o aviso aparece sozinho quando passa do normal
+    const min = Math.floor((Date.now() - Date.parse(info.enviado_em)) / 60e3);
+    const demora = min >= 5 ? `<p class="note check"><strong>Está demorando mais que o normal (${min} min)</strong>
+      ${githubInstavel() ? 'O GitHub está instável (veja o aviso no topo): o PC só recebe o áudio quando ele voltar. '
+        : 'O PC precisa estar ligado e com acesso ao GitHub. '}Se ele ficar mais de 30 min sem acesso, chega um aviso no celular.</p>` : '';
     return `<div class="voz"><p class="lede">⏳ Avaliando no PC: o Whisper transcreve e o Ollama compara com o cartão. Leva 1 a 3 min, com o PC ligado.</p>
-      ${audioPlayer(`audios/${aid}.${info.ext || 'webm'}`, 'audios', 'Ouvir o que você enviou')}</div>`;
+      ${demora}${audioPlayer(`audios/${aid}.${info.ext || 'webm'}`, 'audios', 'Ouvir o que você enviou')}</div>`;
   }
   const av = avaliacaoDe(card, desde);
   const gravar = `<button class="btn" data-act="voz-gravar" ${attr}>🎤 ${av ? 'Responder de novo' : 'Responder em voz alta'}</button>`;
@@ -1302,12 +1349,16 @@ async function filaProcessar() {
 let vozTimer = 0;
 function vozAcompanhar() {
   clearTimeout(vozTimer);
-  const limite = Date.now() - 20 * 60e3;
+  // espera até 3 h (numa queda do GitHub, a avaliação chega bem depois); depois dos primeiros 20 min, relê a cada 3 min
+  const limite = Date.now() - 3 * 3600e3;
   for (const [aid, a] of Object.entries(S.audiosEnviados)) {
     if ((S.data.avaliacoes || {})[aid] || Date.parse(a.enviado_em) < limite) delete S.audiosEnviados[aid];
   }
   store.set('audiosEnviados', S.audiosEnviados);
-  if (Object.keys(S.audiosEnviados).length) vozTimer = setTimeout(() => loadAll().then(vozAcompanhar), 40e3);
+  const enviados = Object.values(S.audiosEnviados);
+  if (!enviados.length) return;
+  const recente = enviados.some(a => Date.now() - Date.parse(a.enviado_em) < 20 * 60e3);
+  vozTimer = setTimeout(() => loadAll().then(vozAcompanhar), recente ? 40e3 : 180e3);
 }
 
 function studyLibrary() {
@@ -1749,7 +1800,7 @@ function render() {
   // meio da reprodução trocava o player por um novo, que parava e voltava ao início
   const players = [...document.querySelectorAll('#view audio')].filter(a => !a.paused || a.currentTime > 0)
     .map(a => ({ el: a, src: a.getAttribute('src'), tocava: !a.paused }));
-  $('#view').innerHTML = !S.cfg && name !== 'ajustes' ? viewWelcome() : views[name]();
+  $('#view').innerHTML = !S.cfg && name !== 'ajustes' ? viewWelcome() : (name === 'livro' ? '' : atrasoAviso()) + views[name]();
   for (const p of players) {
     const novo = [...document.querySelectorAll('#view audio')].find(a => a.getAttribute('src') === p.src && a !== p.el && !a.dataset.mantido);
     if (!novo) continue;
