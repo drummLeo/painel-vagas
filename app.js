@@ -32,6 +32,7 @@ const S = {
   route: '',
   studyOpen: new Set(),                    // baralhos e cartões abertos no Material de estudo (sobrevive ao redesenho)
   treinoAtual: '',                         // cartão escolhido no treino (vazio: o primeiro da fila)
+  treinoAba: store.get('treinoAba', 'diario'),  // aba do Treino: "diario" ou "entrevistas" (cartões por empresa)
   buscaApp: null,                          // app/busca.json: as palavras-chave salvas no app ({data, sha})
   buscaRascunho: null,                     // palavras-chave alteradas e ainda não salvas, por lista (null = voltar ao padrão)
   cartaAberta: '',                         // vaga (ou carta avulsa "manual:…") com a carta aberta
@@ -171,8 +172,9 @@ async function loadAll() {
   S.error = '';
   renderSync();
   try {
-    const cardsFresh = S.data.cards && S.data.modelos && Date.now() - (S.data.cardsAt || 0) < 30 * 60e3;
-    const [vagas, retornos, treino, status, push, appcfg, cartas, respostas, avaliacoes, ultimos, cards, modelos, pdfs, marks, busca, buscaApp] = await Promise.all([
+    // os cartões mudam pouco: relidos a cada 30 min (o "empresas" entra na conta para quem tinha dados de antes dele)
+    const cardsFresh = S.data.cards && S.data.modelos && 'empresas' in S.data && Date.now() - (S.data.cardsAt || 0) < 30 * 60e3;
+    const [vagas, retornos, treino, status, push, appcfg, cartas, respostas, avaliacoes, ultimos, cards, modelos, pdfs, marks, busca, buscaApp, empresas] = await Promise.all([
       readJson('data/vagas.json', []), readJson('data/retornos.json', []), readJson('data/treino.json', null),
       readJson('data/status.json', null), readJson('data/push.json', null), readJson('data/app-config.json', {}),
       readJson('data/cartas.json', {}), readJson('data/respostas.json', {}), readJson('data/avaliacoes.json', {}),
@@ -181,10 +183,11 @@ async function loadAll() {
       cardsFresh ? S.data.modelos : readJson('cartoes/audio/indice.json', {}),
       cardsFresh && S.data.pdfs ? S.data.pdfs : listPdfs(), getFile(MARKS_PATH),
       readJson('data/busca.json', null), getFile(BUSCA_PATH),
+      cardsFresh ? S.data.empresas : readJson('cartoes/empresas.json', null),
     ]);
     Object.assign(S.data, { vagas, retornos, treino, status, push, appcfg, cartas, respostas, avaliacoes, ultimos, busca, at: Date.now() });
     S.buscaApp = buscaApp;
-    if (!cardsFresh || !S.data.pdfs) Object.assign(S.data, { cards, modelos, pdfs, cardsAt: Date.now() });
+    if (!cardsFresh || !S.data.pdfs) Object.assign(S.data, { cards, modelos, pdfs, empresas, cardsAt: Date.now() });
     const remote = marks ? marks.data : {};
     S.marks = normMarks(S.dirty ? deepMerge(remote, S.marks) : remote);
     store.set('data', S.data);
@@ -447,6 +450,7 @@ function viewInicio() {
     parts.push(...unread.slice(0, 3).map(retornoCard));
     if (unread.length > 3) parts.push(`<a class="btn" href="#retornos">Ver todos os retornos</a>`);
   }
+  parts.push(entrevistaAviso());  // entrevista marcada para os próximos dias, com cartões próprios
   const info = treinoInfo();
   if (info) {
     const cta = info.met ? '<p class="lede">Treino de hoje completo. 🔥</p>'
@@ -1306,10 +1310,106 @@ function irNoLivro(alvo) {
   if (el) el.scrollIntoView({ block: 'start' });
 }
 
+// ---------- entrevistas específicas: cartoes/empresas.json no repositório do bot ----------
+// Cartões preparados para uma entrevista marcada (a empresa, a vaga e as respostas). Ficam fora da revisão
+// espaçada e do livro, mas têm áudio-modelo e avaliação da resposta falada, como os do treino.
+function entrevistasOrdenadas() {
+  const emp = S.data.empresas;
+  if (!emp || !Array.isArray(emp.entrevistas)) return { proximas: [], anteriores: [] };
+  const todas = emp.entrevistas.map(e => ({ ...e, cartoes: (emp.cartoes || []).filter(c => c.entrevista === e.id) }));
+  // continua entre as próximas até 3 h depois do fim (para rever logo depois da conversa)
+  const fim = e => Date.parse(e.fim || e.inicio || '') || 0;
+  const proximas = todas.filter(e => !e.inicio || fim(e) + 3 * 3600e3 >= Date.now())
+    .sort((a, b) => (a.inicio || '').localeCompare(b.inicio || ''));
+  const anteriores = todas.filter(e => !proximas.includes(e)).sort((a, b) => (b.inicio || '').localeCompare(a.inicio || ''));
+  return { proximas, anteriores };
+}
+
+// "hoje, 17h30", "amanhã, 9h", "ter., 10/11, 14h"
+function quandoEntrevista(iso) {
+  const d = new Date(iso);
+  if (isNaN(d)) return '';
+  const hora = d.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }).replace(':', 'h').replace(/h00$/, 'h')
+    .replace(/^0/, '');
+  const dia = x => { const y = new Date(x); y.setHours(0, 0, 0, 0); return y.getTime(); };
+  const dif = Math.round((dia(d) - dia(Date.now())) / 864e5);
+  if (dif === 0) return `hoje, ${hora}`;
+  if (dif === 1) return `amanhã, ${hora}`;
+  if (dif === -1) return `ontem, ${hora}`;
+  return `${d.toLocaleDateString('pt-BR', { weekday: 'short', day: 'numeric', month: 'numeric' })}, ${hora}`;
+}
+
+// o que ainda depende de uma decisão sua aparece marcado
+const comLacunas = html => html.replace(/_{4,}/g, '<mark class="lacuna">____</mark>');
+
+function entrevistaCartao(c) {
+  const av = avaliacaoDe(c.id);
+  const nota = av && typeof av[1].nota === 'number'
+    ? ` <span class="pill ${av[1].nota >= 8 ? 'ok' : av[1].nota >= 5 ? 'warn' : 'bad'}">${notaTexto(av[1].nota)}</span>` : '';
+  return `<details class="study"${aberto(c.id)}>
+    <summary>${c.lingua === 'en' ? '<span class="pill brand">EN</span> ' : ''}${richText(c.q)}${nota}</summary>
+    <p class="meta">${esc(c.tema || '')}${c.tempo ? ` · alvo ${esc(c.tempo)}` : ''}</p>
+    <ul class="answer">${(c.a || []).map(x => `<li>${comLacunas(richText(x))}</li>`).join('')}</ul>
+    ${modeloNote(c)}
+    ${c.extra ? `<div class="note"><strong>Se aprofundarem</strong>${comLacunas(richText(c.extra))}</div>` : ''}
+    ${vozBlock(c.id)}
+  </details>`;
+}
+
+function entrevistaPanel(e, passada = false) {
+  const li = xs => (xs || []).map(x => `<li>${richText(x)}</li>`).join('');
+  const treino = Object.fromEntries(((S.data.cards || {}).cartoes || []).map(c => [c.id, c]));
+  const revisar = (e.revisar || []).filter(id => treino[id]);
+  const curto = id => { const q = treino[id].q.replace(/<[^>]+>/g, ''); return q.length > 30 ? q.slice(0, 29) + '…' : q; };
+  const praticados = e.cartoes.filter(c => avaliacaoDe(c.id)).length;
+  return `<section class="panel entrevista">
+    <div class="row"><h2>🗓 ${esc(e.empresa)}</h2>${e.inicio ? `<span class="pill ${passada ? 'brand' : 'warn'}">${esc(quandoEntrevista(e.inicio))}</span>` : ''}</div>
+    <p class="meta">${esc(e.vaga || '')}${e.site ? ` · <a href="${esc(e.site)}" target="_blank" rel="noopener">site da empresa</a>` : ''}</p>
+    ${e.formato ? `<p class="lede">${richText(e.formato)}</p>` : ''}
+    ${(e.atencao || []).length ? `<div class="note check"><strong>Atenção</strong><ul>${li(e.atencao)}</ul></div>` : ''}
+    <details class="study"${aberto(`ent:${e.id}:sobre`)}><summary>Sobre a empresa</summary><ul class="answer">${li(e.sobre)}</ul></details>
+    <details class="study"${aberto(`ent:${e.id}:vaga`)}><summary>A vaga</summary><ul class="answer">${li(e.vaga_detalhes)}</ul></details>
+    <p class="meta">${plural(e.cartoes.length, 'cartão', 'cartões')} desta entrevista · ${praticados} já respondido${praticados === 1 ? '' : 's'} em voz alta</p>
+    <div class="study-list">${e.cartoes.map(entrevistaCartao).join('')}</div>
+    ${revisar.length ? `<div class="revisar"><p class="meta">Revise também, no treino diário</p>
+      <div class="chips">${revisar.map(id => `<button class="pill brand" data-act="treino-ir" data-id="${esc(id)}" title="${esc(treino[id].q.replace(/<[^>]+>/g, ''))}">${esc(curto(id))}</button>`).join('')}</div></div>` : ''}
+    ${e.fontes ? `<p class="meta">Fontes: ${esc(e.fontes)}</p>` : ''}
+  </section>`;
+}
+
+function viewEntrevistas() {
+  const { proximas, anteriores } = entrevistasOrdenadas();
+  if (!proximas.length && !anteriores.length) {
+    return '<p class="empty">Nenhuma entrevista com cartões próprios ainda. Quando uma entrevista for marcada, os cartões dela (a empresa, a vaga e as respostas) aparecem aqui.</p>';
+  }
+  return `<p class="lede">Cartões preparados para cada entrevista marcada. Ficam fora da revisão espaçada; responda em voz alta para o PC avaliar, como no treino.</p>
+    ${proximas.map(e => entrevistaPanel(e)).join('')}
+    ${anteriores.length ? `<details class="deck"${aberto('ent:anteriores')}><summary>Entrevistas anteriores <span class="meta">${anteriores.length}</span></summary>
+      ${anteriores.map(e => entrevistaPanel(e, true)).join('')}</details>` : ''}`;
+}
+
+function treinoAbas() {
+  const n = entrevistasOrdenadas().proximas.length;
+  const aba = S.treinoAba === 'entrevistas' ? 'entrevistas' : 'diario';
+  return `<div class="seg treino-abas" role="group" aria-label="Aba do treino">
+    <button data-act="treino-aba" data-f="diario" aria-pressed="${aba === 'diario'}">Treino diário</button>
+    <button data-act="treino-aba" data-f="entrevistas" aria-pressed="${aba === 'entrevistas'}">Entrevistas${n ? ` <span class="n">${n}</span>` : ''}</button></div>`;
+}
+
+// aviso no Início e no treino diário: entrevista com cartões próprios nos próximos 3 dias
+function entrevistaAviso() {
+  const e = entrevistasOrdenadas().proximas.find(x => x.inicio && Date.parse(x.inicio) - Date.now() < 3 * 864e5);
+  if (!e) return '';
+  return `<section class="panel hl"><h2>🗓 Entrevista ${esc(quandoEntrevista(e.inicio))}: ${esc(e.empresa)}</h2>
+    <p class="lede">${esc(e.vaga || '')}. ${plural(e.cartoes.length, 'cartão preparado', 'cartões preparados')} para ela, com a empresa e a vaga resumidas.</p>
+    <button class="btn primary" data-act="treino-aba" data-f="entrevistas">Ver os cartões</button></section>`;
+}
+
 function viewTreino() {
+  if (S.treinoAba === 'entrevistas') return `<h1>Treino</h1>${treinoAbas()}${viewEntrevistas()}`;
   const info = treinoInfo();
-  if (!info) return `<h1>Treino</h1><p class="empty">Os cartões aparecem depois da próxima execução do bot.</p>${studyLibrary()}`;
-  const parts = [`<h1>Treino</h1>`, `<section class="panel">${todayPanel(info)}</section>`];
+  if (!info) return `<h1>Treino</h1>${treinoAbas()}<p class="empty">Os cartões aparecem depois da próxima execução do bot.</p>${studyLibrary()}`;
+  const parts = [`<h1>Treino</h1>`, treinoAbas(), entrevistaAviso(), `<section class="panel">${todayPanel(info)}</section>`];
   if (!info.isToday) {
     parts.push(`<div class="panel alert"><p class="lede">Estes são os cartões de ${esc(info.t.dia.split('-').reverse().slice(0, 2).join('/'))}. Os de hoje chegam na próxima execução do bot.</p><button class="btn" data-act="refresh">Atualizar agora</button></div>`);
   }
@@ -1895,11 +1995,21 @@ document.addEventListener('click', e => {
       toast('Pulado: ele volta no fim da fila.');
     } else {
       S.treinoAtual = el.dataset.id;
+      // o cartão abre no treino diário (o "Revise também" da aba Entrevistas também vem para cá)
+      S.treinoAba = 'diario';
+      store.set('treinoAba', 'diario');
     }
     S.reveal = false;
     render();
     const flash = $('#view .flash');
     if (flash) flash.scrollIntoView({ block: 'start' });
+  } else if (act === 'treino-aba') {
+    if (vozRec.rec) return toast('Pare a gravação antes de trocar de aba.');
+    S.treinoAba = el.dataset.f === 'entrevistas' ? 'entrevistas' : 'diario';
+    store.set('treinoAba', S.treinoAba);
+    if (S.route !== 'treino') location.hash = '#treino';  // o aviso do Início leva direto à aba
+    else render();
+    window.scrollTo(0, 0);
   } else if (act === 'ir-estudo') {
     const est = $('#estudo');
     if (est) est.scrollIntoView({ block: 'start' });
