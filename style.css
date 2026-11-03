@@ -177,6 +177,9 @@ details.busca[open] { gap: 14px; }
 .treino-abas { margin: 0 0 4px; }
 .entrevista .study-list { margin-top: 4px; }
 .entrevista .revisar { margin-top: 8px; }
+.pill .nota-mini { display: inline-block; margin-left: 6px; padding: 0 6px; border-radius: 6px; border: 1px solid currentColor;
+  font-size: 11px; font-variant-numeric: tabular-nums; opacity: .9; }
+.pill .nota-mini::before { content: 'nota '; font-weight: 400; }
 mark.lacuna { background: var(--warn-soft); color: var(--warn); border-radius: 4px; padding: 0 3px; font-weight: 700; }
 .job h2 { font-size: 16px; }
 .job .tags { display: flex; flex-wrap: wrap; gap: 6px; margin: 2px 0 4px; }

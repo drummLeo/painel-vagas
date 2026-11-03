@@ -1570,9 +1570,10 @@ function entrevistaPanel(e, passada = false) {
   const atalho = (c, k) => {
     const m = S.marks.entrevistas[c.id];
     const av = avaliacaoDe(c.id);
-    const nota = av && typeof av[1].nota === 'number' ? ` ${notaTexto(av[1].nota)}` : '';
+    // a nota vai no fim, num selo à parte: colada ao número do cartão ("7,5 1.") confundia
+    const nota = av && typeof av[1].nota === 'number' ? ` <span class="nota-mini" title="Nota da última resposta falada">${notaTexto(av[1].nota)}</span>` : '';
     const cls = m ? (m.sei ? 'ok' : 'warn') : 'brand';
-    return `<button class="pill ${cls}" data-act="ent-ir" data-ent="${esc(e.id)}" data-id="${esc(c.id)}" title="${esc(c.q.replace(/<[^>]+>/g, ''))}"${c.id === atual ? ' aria-current="true"' : ''}>${m ? (m.sei ? '✓' : '↻') : '·'}${nota} ${k + 1}. ${esc(curto(c.q))}</button>`;
+    return `<button class="pill ${cls}" data-act="ent-ir" data-ent="${esc(e.id)}" data-id="${esc(c.id)}" title="${esc(c.q.replace(/<[^>]+>/g, ''))}"${c.id === atual ? ' aria-current="true"' : ''}>${m ? (m.sei ? '✓' : '↻') : '·'} ${k + 1}. ${esc(curto(c.q))}${nota}</button>`;
   };
   return `<section class="panel entrevista">
     <div class="row"><h2>🗓 ${esc(e.empresa)}</h2>${e.inicio ? `<span class="pill ${passada ? 'brand' : 'warn'}">${esc(quandoEntrevista(e.inicio))}</span>` : ''}</div>
