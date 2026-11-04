@@ -284,6 +284,8 @@ select { min-width: 0; max-width: 100%; }
 .avaliacao summary + .carta-texto { margin-top: 8px; }
 .pontos { margin: 0; padding: 0; list-style: none; display: grid; gap: 6px; font-size: 15px; }
 .avaliacao .note ul { margin: 4px 0 0; padding-left: 18px; font-size: 14px; }
+.avaliacao .note.ingles li + li { margin-top: 6px; }
+.note.ingles strong.melhor { display: inline; font: inherit; font-weight: 600; letter-spacing: 0; text-transform: none; color: var(--ink); }
 .player { display: grid; gap: 4px; }
 .player audio { width: 100%; }
 .note.modelo { display: grid; gap: 8px; }

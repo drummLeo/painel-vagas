@@ -1160,7 +1160,12 @@ function notaView(a) {
   const pc = a.pouco_claro || [];
   const clareza = pc.length ? `<p class="meta clareza">−${notaTexto(a.desconto_clareza)} por ${pc.length === 1 ? '1 nome pouco claro' : `${pc.length} nomes pouco claros`}:
     ${pc.map(c => `“${esc(c.ouvido)}” (era ${esc(c.certo)})`).join('; ')}</p>` : '';
-  return `<div class="nota-aval"><span class="pill ${cls}">Nota ${notaTexto(a.nota)}<small>/10</small></span>${a.nota_motivo ? `<span class="meta">${esc(a.nota_motivo)}</span>` : ''}</div>${clareza}`;
+  // nos cartões em inglês, cada frase a melhorar desconta 0,2 (até 1)
+  const ni = (a.ingles || []).length;
+  const ingles = ni && a.desconto_ingles ? `<p class="meta clareza">−${notaTexto(a.desconto_ingles)} por ${ni === 1 ? '1 frase' : `${ni} frases`} a melhorar no inglês</p>` : '';
+  const rev = a.revisao && typeof a.revisao.nota_anterior === 'number'
+    ? `<p class="meta clareza">Nota revisada à mão (antes: ${notaTexto(a.revisao.nota_anterior)}).</p>` : '';
+  return `<div class="nota-aval"><span class="pill ${cls}">Nota ${notaTexto(a.nota)}<small>/10</small></span>${a.nota_motivo ? `<span class="meta">${esc(a.nota_motivo)}</span>` : ''}</div>${clareza}${ingles}${rev}`;
 }
 
 // as seções que abrem e fecham lembram o estado: o app redesenha a tela (ao tocar um áudio, por exemplo)
@@ -1193,6 +1198,7 @@ function avaliacaoView(a, aid = '') {
   const icone = { coberto: '✅', parcial: '🟡', faltou: '❌' };
   const pontos = (a.pontos || []).map(p => `<li>${icone[p.status] || '•'} ${esc(p.ponto)}</li>`).join('');
   const erros = (a.erros || []).map(e => `<li>Você disse “${esc(e.disse)}”; o cartão diz “${esc(e.cartao)}”.</li>`).join('');
+  const ingles = (a.ingles || []).map(x => `<li>“${esc(x.disse)}” → <strong class="melhor">“${esc(x.melhor)}”</strong>${x.motivo ? `<br><span class="meta">${esc(x.motivo)}</span>` : ''}</li>`).join('');
   const sug = a.sugestao === 'ja_sei' ? '✅ Já sei' : '🔁 Preciso revisar';
   return `<div class="avaliacao">
     ${notaView(a)}
@@ -1200,6 +1206,7 @@ function avaliacaoView(a, aid = '') {
     <details${aberto(`disse:${aid || a.avaliada_em}`)}><summary>O que você disse</summary><div class="carta-texto">${esc(a.transcricao || '')}</div></details>
     ${pontos ? `<ul class="pontos">${pontos}</ul>` : ''}
     ${erros ? `<div class="note check"><strong>Diferente do cartão</strong><ul>${erros}</ul></div>` : ''}
+    ${ingles ? `<div class="note ingles"><strong>Seu inglês</strong><ul>${ingles}</ul></div>` : ''}
     ${a.comentario ? `<p class="lede">${esc(a.comentario)}</p>` : ''}
     <p class="meta">Sugestão: <strong>${sug}</strong>. Quem marca é você.</p></div>`;
 }
